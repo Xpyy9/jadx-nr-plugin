@@ -21,13 +21,13 @@ In jadx-cli:
 
 ```bash
 # 1. 查询全限定名类
-curl http://localhost:13997/classAsk?name=com.jd.jdsdk.security.AesCbcCrypto
+curl http://localhost:13997/classAsk?name=com.example.MyClass
 
 # 2. 查询短类名（模糊匹配）
-curl http://localhost:13997/classAsk?name=AesCbcCrypto
+curl http://localhost:13997/classAsk?name=MyClass
 
 # 3. 查询类名.方法名（自动提取类名匹配）
-curl http://localhost:13997/classAsk?name=com.jd.jdsdk.security.AesCbcCrypto.decrypt
+curl http://localhost:13997/classAsk?name=com.example.MyClass
 ```
 ### 获取资源文件
 ```bash
@@ -46,7 +46,7 @@ curl http://localhost:13997/sourceAsk?name=res\values\strings.xml
 ### 获取函数调用链
 ```bash
 # 1. 查询全限定类名+方法名
-curl http://localhost:13997/callAsk?name=com.jd.jdsdk.security.AesCbcCrypto.decrypt
+curl http://localhost:13997/callAsk?name=com.example.MyClass
 
 # 2. 查询内部类方法（兼容$和.）
 curl http://localhost:13997/callAsk?name=com.example.MyClass$InnerClass.doSomething
