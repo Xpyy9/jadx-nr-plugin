@@ -51,6 +51,7 @@ public class agentSend {
 		//发送agent操作
 		CompletableFuture.runAsync(() -> {
 			try {
+				LOG.info("[+]Send Agent URL: "+apiUrl);
 				sendToAgent(apiUrl, selectedText);
 			} catch (Exception e) {
 				LOG.error("发送到agent失败", e);

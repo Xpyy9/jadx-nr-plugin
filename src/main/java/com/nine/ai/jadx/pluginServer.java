@@ -93,10 +93,12 @@ public class pluginServer {
 			// 注册API端点（全部包装为安全处理器）
 			server.createContext("/classAsk", new SafeHandler(new ClassAskHandler())); // 类代码获取接口
 			server.createContext("/sourceAsk", new SafeHandler(new SourceAskHandler())); // 资源文件获取接口
+			server.createContext("/resourceLineCount", new SafeHandler(new ResourceLineCountHandler())); // 文件总行数获取接口
 			server.createContext("/callAsk", new SafeHandler(new CallAskHandler())); // 函数调用链获取接口
 			server.createContext("/cache/clear", new SafeHandler(new ClearCacheHandler())); // 清缓存接口
 			server.createContext("/status", new SafeHandler(new StatusHandler())); // 状态检查接口
 			server.createContext("/health", new SafeHandler(new HealthCheckHandler())); // 健康状态检查接口
+			server.createContext("/findKeywordLine", new SafeHandler(new KeywordSearchHandler())); // 搜索指定文件指定字符串出现的次数和所有行数
 
 			// 创建命名线程池（方便调试，守护线程不阻塞Jadx退出）
 			executor = Executors.newFixedThreadPool(maxThreadPoolSize, new ThreadFactory() {
@@ -448,71 +450,127 @@ public class pluginServer {
 				sendResponse(exchange, 503, "Service temporarily unavailable");
 				return;
 			}
-			// 仅允许GET请求
 			if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
 				sendResponse(exchange, 405, "Method not allowed (only GET)");
 				return;
 			}
-			// 解析参数
+
 			Map<String, String> params = parseParams(exchange.getRequestURI().getQuery());
 			String className = params.get("name");
-			// 参数校验
+
 			if (className == null || className.trim().isEmpty()) {
 				sendResponse(exchange, 400, "Error: missing 'name' parameter (class name)");
 				return;
 			}
-			// 类名格式校验
-			if (!CLASS_NAME_PATTERN.matcher(className).matches()) {
-				sendResponse(exchange, 400, "Error: invalid class name format: " + className);
-				return;
-			}
-			// 获取反编译器
+
 			JadxDecompiler decompiler = getDecompiler();
 			if (decompiler == null) {
 				sendResponse(exchange, 500, "Error: Jadx decompiler not available");
 				return;
 			}
-			// 初始化缓存
 			initClassCache(decompiler);
-			// 查找类（兼容内部类格式，支持类名.方法名降级匹配）
+
 			String normalizedName = className.replace('$', '.').trim();
 			JavaClass targetClass = null;
+			String targetMethodName = null;
+
 			synchronized (classCacheLock) {
-				// 1. 优先匹配完整类名
 				targetClass = classCache.get(normalizedName);
-				// 2. 降级匹配：类名.方法名 → 提取类名匹配
+
 				if (targetClass == null && normalizedName.contains(".")) {
 					int lastDotIdx = normalizedName.lastIndexOf('.');
-					if (lastDotIdx > 0) {
-						String pureClassName = normalizedName.substring(0, lastDotIdx);
-						targetClass = classCache.get(pureClassName);
+					if (lastDotIdx > 0 && lastDotIdx < normalizedName.length() - 1) {
+						String pureClass = normalizedName.substring(0, lastDotIdx);
+						targetMethodName = normalizedName.substring(lastDotIdx + 1);
+						targetClass = classCache.get(pureClass);
 					}
 				}
-				// 3. 再降级：尝试短类名匹配
+
 				if (targetClass == null) {
 					int lastDotIdx = normalizedName.lastIndexOf('.');
-					String shortName = lastDotIdx > 0 ?
-							normalizedName.substring(lastDotIdx + 1) : normalizedName;
+					String shortName = lastDotIdx > 0 ? normalizedName.substring(lastDotIdx + 1) : normalizedName;
 					targetClass = classCache.get(shortName);
+					targetMethodName = null;
 				}
 			}
-			// 类不存在
+
 			if (targetClass == null) {
 				sendResponse(exchange, 404, "Error: class not found: " + className);
 				return;
 			}
-			// 获取类代码并返回
+
 			try {
-				String classCode = targetClass.getCode();
-				if (classCode == null || classCode.isEmpty()) {
-					sendResponse(exchange, 500, "Error: empty class code for: " + className);
-					return;
+				// ==============================================
+				// 【修复】JavaMethod 没有 getCode()，改用正确方式提取方法代码
+				// ==============================================
+				if (targetMethodName != null) {
+					JavaMethod targetMethod = null;
+					for (JavaMethod m : targetClass.getMethods()) {
+						if (m != null && targetMethodName.equals(m.getName())) {
+							targetMethod = m;
+							break;
+						}
+					}
+
+					if (targetMethod == null) {
+						sendResponse(exchange, 404, "Error: method not found: " + targetMethodName);
+						return;
+					}
+
+					// 【正确方法】从类代码中提取当前方法代码
+					String methodCode = extractMethodCode(targetClass.getCode(), targetMethod.getName());
+					sendResponse(exchange, 200, "// ==== METHOD: " + normalizedName + " ====\n\n" + methodCode);
+				} else {
+					// 返回类完整代码
+					String classCode = targetClass.getCode();
+					if (classCode == null || classCode.isEmpty()) {
+						sendResponse(exchange, 500, "Error: empty class code for: " + className);
+						return;
+					}
+					sendResponse(exchange, 200, classCode);
 				}
-				sendResponse(exchange, 200, classCode);
 			} catch (Exception e) {
-				LOG.error("Failed to get code for class: {}", className, e);
-				sendResponse(exchange, 500, "Error: failed to retrieve class code: " + e.getMessage());
+				LOG.error("Failed to get code for: {}", className, e);
+				sendResponse(exchange, 500, "Error: failed to retrieve code: " + e.getMessage());
 			}
+		}
+
+		// ==============================================
+		// 工具方法：从类代码中提取方法代码
+		// ==============================================
+		private String extractMethodCode(String classCode, String methodName) {
+			if (classCode == null || methodName == null) {
+				return "// Method code not available";
+			}
+			String[] lines = classCode.split("\n");
+			StringBuilder methodCode = new StringBuilder();
+			boolean inMethod = false;
+			int braceCount = 0;
+
+			for (String line : lines) {
+				String trimLine = line.trim();
+
+				// 匹配方法开始行
+				if (!inMethod && trimLine.contains(" " + methodName + "(")) {
+					inMethod = true;
+				}
+
+				if (inMethod) {
+					methodCode.append(line).append("\n");
+
+					// 大括号匹配
+					for (char c : line.toCharArray()) {
+						if (c == '{') braceCount++;
+						if (c == '}') braceCount--;
+					}
+
+					// 方法结束
+					if (braceCount == 0 && inMethod) {
+						break;
+					}
+				}
+			}
+			return methodCode.length() > 0 ? methodCode.toString() : "// Method code not found";
 		}
 	}
 
@@ -531,27 +589,37 @@ public class pluginServer {
 				sendResponse(exchange, 405, "Method not allowed (only GET)");
 				return;
 			}
+
 			// 解析参数
 			Map<String, String> params = parseParams(exchange.getRequestURI().getQuery());
 			String resName = params.get("name");
+
+			// ========== 新增：读取 startLine 和 endLine 参数 ==========
+			String startLineStr = params.get("startLine");
+			String endLineStr = params.get("endLine");
+
 			// 参数校验
 			if (resName == null || resName.trim().isEmpty()) {
 				sendResponse(exchange, 400, "Error: missing 'name' parameter (resource name)");
 				return;
 			}
+
 			// 资源路径格式校验（防止路径遍历攻击）
 			if (!RESOURCE_PATH_PATTERN.matcher(resName).matches()) {
 				sendResponse(exchange, 400, "Error: invalid resource path: " + resName);
 				return;
 			}
+
 			// 获取反编译器
 			JadxDecompiler decompiler = getDecompiler();
 			if (decompiler == null) {
 				sendResponse(exchange, 500, "Error: Jadx decompiler not available");
 				return;
 			}
+
 			// 初始化缓存
 			initResourceCache(decompiler);
+
 			// 查找资源
 			ResourceFile targetRes = null;
 			synchronized (resourceCacheLock) {
@@ -567,22 +635,161 @@ public class pluginServer {
 					targetRes = resourceCache.get(lowerCaseResName);
 				}
 			}
+
 			// 资源不存在
 			if (targetRes == null) {
 				sendResponse(exchange, 404, "Error: resource not found: " + resName);
 				return;
 			}
-			// 加载资源内容并返回（使用兼容方法）
+
+			// 加载资源内容
 			try {
 				String resContent = getResourceContent(targetRes);
 				if (resContent == null || resContent.isEmpty()) {
 					sendResponse(exchange, 500, "Error: empty text content for resource: " + resName);
 					return;
 				}
-				sendResponse(exchange, 200, resContent);
+
+				// ========== 核心：截取指定行范围 ==========
+				String finalContent = extractLineRange(resContent, startLineStr, endLineStr);
+				sendResponse(exchange, 200, finalContent);
+
 			} catch (Exception e) {
 				LOG.error("Failed to load resource: {}", resName, e);
 				sendResponse(exchange, 500, "Error: failed to load resource: " + e.getMessage());
+			}
+		}
+
+		// =======================================================================
+		// 工具方法：从全文本中截取 [startLine, endLine] 范围内容
+		// 不传参数 → 返回全部
+		// startLine 不传 → 默认从第1行开始
+		// endLine 不传 → 默认读到最后一行
+		// =======================================================================
+		private String extractLineRange(String fullContent, String startLineStr, String endLineStr) {
+			if (fullContent == null || fullContent.isEmpty()) {
+				return fullContent;
+			}
+
+			// 按行拆分
+			String[] lines = fullContent.split("\\R"); // 兼容所有换行符
+			int totalLines = lines.length;
+
+			// 解析 startLine，默认 1
+			int startLine = 1;
+			try {
+				if (startLineStr != null && !startLineStr.trim().isEmpty()) {
+					startLine = Integer.parseInt(startLineStr.trim());
+				}
+			} catch (NumberFormatException e) {
+				startLine = 1;
+			}
+
+			// 解析 endLine，默认最后一行
+			int endLine = totalLines;
+			try {
+				if (endLineStr != null && !endLineStr.trim().isEmpty()) {
+					endLine = Integer.parseInt(endLineStr.trim());
+				}
+			} catch (NumberFormatException e) {
+				endLine = totalLines;
+			}
+
+			// 安全边界修正
+			startLine = Math.max(startLine, 1);
+			endLine = Math.min(endLine, totalLines);
+			if (startLine > endLine) {
+				int temp = startLine;
+				startLine = endLine;
+				endLine = temp;
+			}
+
+			// 拼接结果
+			StringBuilder sb = new StringBuilder();
+			sb.append("// ==== Resource lines ").append(startLine).append(" - ").append(endLine)
+					.append(" (Total lines: ").append(totalLines).append(") ====\n\n");
+
+			for (int i = startLine - 1; i <= endLine - 1; i++) {
+				sb.append(lines[i]).append("\n");
+			}
+
+			return sb.toString();
+		}
+	}
+
+	// =======================================================================
+	// 获取指定文件总行数
+	// =======================================================================
+	private class ResourceLineCountHandler implements HttpHandler {
+		@Override
+		public void handle(HttpExchange exchange) throws IOException {
+			if (!isRunning.get()) {
+				sendResponse(exchange, 503, "Service temporarily unavailable");
+				return;
+			}
+			if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+				sendResponse(exchange, 405, "Method not allowed (only GET)");
+				return;
+			}
+
+			// 解析参数
+			Map<String, String> params = parseParams(exchange.getRequestURI().getQuery());
+			String resName = params.get("name");
+
+			// 参数校验
+			if (resName == null || resName.trim().isEmpty()) {
+				sendResponse(exchange, 400, "Error: missing 'name' parameter (resource name)");
+				return;
+			}
+
+			// 资源路径安全校验
+			if (!RESOURCE_PATH_PATTERN.matcher(resName).matches()) {
+				sendResponse(exchange, 400, "Error: invalid resource path: " + resName);
+				return;
+			}
+
+			// 获取反编译器
+			JadxDecompiler decompiler = getDecompiler();
+			if (decompiler == null) {
+				sendResponse(exchange, 500, "Error: Jadx decompiler not available");
+				return;
+			}
+			initResourceCache(decompiler);
+
+			// 查找资源（完全沿用你原来的兼容逻辑）
+			ResourceFile targetRes = null;
+			synchronized (resourceCacheLock) {
+				targetRes = resourceCache.get(resName);
+				if (targetRes == null) {
+					String unified = resName.replace('\\', '/');
+					targetRes = resourceCache.get(unified);
+				}
+				if (targetRes == null) {
+					targetRes = resourceCache.get(resName.toLowerCase());
+				}
+			}
+
+			if (targetRes == null) {
+				sendResponse(exchange, 404, "Error: resource not found: " + resName);
+				return;
+			}
+
+			// 获取内容 → 计算行数
+			try {
+				String content = getResourceContent(targetRes);
+				int lineCount = 0;
+				if (content != null && !content.isEmpty()) {
+					lineCount = content.split("\\R").length; // 兼容所有换行符
+				}
+
+				// ==============================
+				// 返回：纯数字总行数
+				// ==============================
+				sendResponse(exchange, 200, String.valueOf(lineCount));
+
+			} catch (Exception e) {
+				LOG.error("Failed to get resource line count: {}", resName, e);
+				sendResponse(exchange, 500, "Error: failed to get line count: " + e.getMessage());
 			}
 		}
 	}
@@ -650,64 +857,70 @@ public class pluginServer {
 				sendResponse(exchange, 405, "Method not allowed (only GET)");
 				return;
 			}
+
 			// 解析参数
 			Map<String, String> params = parseParams(exchange.getRequestURI().getQuery());
-			String methodFullName = params.get("name");
+			String fullName = params.get("name");
+
 			// 参数校验
-			if (methodFullName == null || !methodFullName.contains(".")) {
-				sendResponse(exchange, 400, "Error: 'name' must be in format: ClassName.methodName");
+			if (fullName == null || !fullName.contains(".")) {
+				sendResponse(exchange, 400, "Error: 'name' must be a valid class or method full name");
 				return;
 			}
-			// 获取反编译器
+
 			JadxDecompiler decompiler = getDecompiler();
 			if (decompiler == null) {
 				sendResponse(exchange, 500, "Error: Jadx decompiler not available");
 				return;
 			}
-			// 初始化缓存
 			initClassCache(decompiler);
-			// 拆分类名和方法名
-			String normalizedName = methodFullName.replace('$', '.').trim();
-			int lastDotIdx = normalizedName.lastIndexOf('.');
-			if (lastDotIdx <= 0 || lastDotIdx >= normalizedName.length() - 1) {
-				sendResponse(exchange, 400, "Error: invalid method name format: " + methodFullName);
-				return;
-			}
-			String className = normalizedName.substring(0, lastDotIdx);
-			String methodName = normalizedName.substring(lastDotIdx + 1);
 
-			// 查找类
-			JavaClass targetClass = null;
-			synchronized (classCacheLock) {
-				targetClass = classCache.get(className);
-			}
-			if (targetClass == null) {
-				sendResponse(exchange, 404, "Error: class not found: " + className);
-				return;
-			}
-			// 查找方法
-			JavaMethod targetMethod = null;
-			for (JavaMethod method : targetClass.getMethods()) {
-				if (method != null && methodName.equals(method.getName())) {
-					targetMethod = method;
-					break;
-				}
-			}
-			if (targetMethod == null) {
-				sendResponse(exchange, 404, "Error: method not found: " + methodName + " in class: " + className);
-				return;
-			}
-			// 获取调用链并构建响应
+			String normalizedName = fullName.replace('$', '.').trim();
+			List<JavaNode> callers = null;
+			String targetDisplay = "";
+
 			try {
-				List<JavaNode> callers = targetMethod.getUseIn();
+				// ==============================================
+				// 【核心修改】自动判断：是类？还是方法？
+				// ==============================================
+				JavaClass targetClass = findClass(normalizedName);
+				if (targetClass != null) {
+					// ======================
+					// 情况1：传入的是 类
+					// ======================
+					targetDisplay = "Class: " + normalizedName;
+					callers = targetClass.getUseIn(); // 获取整个类的调用链
+				} else {
+					// ======================
+					// 情况2：传入的是 方法
+					// ======================
+					int lastDotIdx = normalizedName.lastIndexOf('.');
+					String className = normalizedName.substring(0, lastDotIdx);
+					String methodName = normalizedName.substring(lastDotIdx + 1);
+
+					targetClass = findClass(className);
+					if (targetClass == null) {
+						sendResponse(exchange, 404, "Error: class not found: " + className);
+						return;
+					}
+
+					JavaMethod targetMethod = findMethod(targetClass, methodName);
+					if (targetMethod == null) {
+						sendResponse(exchange, 404, "Error: method not found: " + methodName);
+						return;
+					}
+
+					targetDisplay = "Method: " + fullName;
+					callers = targetMethod.getUseIn();
+				}
+
+				// 构建响应
 				StringBuilder response = new StringBuilder();
-				// 响应头部信息（使用兼容方法获取签名）
-				response.append("// ====== Call Chain for: ").append(methodFullName).append(" ======\n");
-				response.append("// Method Signature: ").append(getMethodSignature(targetMethod)).append("\n");
+				response.append("// ====== Call Chain for: ").append(targetDisplay).append(" ======\n");
 				response.append("// Callers Count: ").append(callers != null ? callers.size() : 0).append("\n\n");
-				// 调用者列表
+
 				if (callers == null || callers.isEmpty()) {
-					response.append("// No callers found (method may be unused)\n");
+					response.append("// No callers found\n");
 				} else {
 					for (int i = 0; i < callers.size(); i++) {
 						JavaNode caller = callers.get(i);
@@ -719,14 +932,35 @@ public class pluginServer {
 						}
 					}
 				}
-				// 发送响应
+
 				sendResponse(exchange, 200, response.toString());
+
 			} catch (Exception e) {
-				LOG.error("Failed to get call chain for: {}", methodFullName, e);
-				sendResponse(exchange, 500, "Error: failed to retrieve call chain: " + e.getMessage());
+				sendResponse(exchange, 500, "Error: " + e.getMessage());
 			}
 		}
 	}
+
+		// ======================
+		// 工具方法：查找类
+		// ======================
+		private JavaClass findClass(String className) {
+			synchronized (classCacheLock) {
+				return classCache.get(className);
+			}
+		}
+
+		// ======================
+		// 工具方法：查找方法
+		// ======================
+		private JavaMethod findMethod(JavaClass clazz, String methodName) {
+			for (JavaMethod m : clazz.getMethods()) {
+				if (m != null && methodName.equals(m.getName())) {
+					return m;
+				}
+			}
+			return null;
+		}
 
 	/**
 	 * /cache/clear - 清空缓存（POST请求）
@@ -787,6 +1021,112 @@ public class pluginServer {
 			}
 			String healthStatus = isRunning.get() ? "healthy" : "unhealthy";
 			sendResponse(exchange, 200, healthStatus);
+		}
+	}
+
+	/**
+	 * /findKeywordLine -获取关键字符串所在的所有行数和出现次数
+	 */
+	private class KeywordSearchHandler implements HttpHandler {
+		@Override
+		public void handle(HttpExchange exchange) throws IOException {
+			if (!isRunning.get()) {
+				sendResponse(exchange, 503, "Service temporarily unavailable");
+				return;
+			}
+			if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+				sendResponse(exchange, 405, "Method not allowed (only GET)");
+				return;
+			}
+
+			// 解析参数
+			Map<String, String> params = parseParams(exchange.getRequestURI().getQuery());
+			String resName = params.get("name");
+			String keyword = params.get("keyword");
+
+			// 参数校验
+			if (resName == null || resName.trim().isEmpty()) {
+				sendResponse(exchange, 400, "Error: missing 'name' parameter");
+				return;
+			}
+			if (keyword == null || keyword.trim().isEmpty()) {
+				sendResponse(exchange, 400, "Error: missing 'keyword' parameter");
+				return;
+			}
+
+			// 路径安全校验
+			if (!RESOURCE_PATH_PATTERN.matcher(resName).matches()) {
+				sendResponse(exchange, 400, "Error: invalid resource path");
+				return;
+			}
+
+			// 获取反编译器
+			JadxDecompiler decompiler = getDecompiler();
+			if (decompiler == null) {
+				sendResponse(exchange, 500, "Error: Jadx decompiler not available");
+				return;
+			}
+			initResourceCache(decompiler);
+
+			// 查找资源（沿用你原有兼容逻辑）
+			ResourceFile targetRes = null;
+			synchronized (resourceCacheLock) {
+				targetRes = resourceCache.get(resName);
+				if (targetRes == null) {
+					String unified = resName.replace('\\', '/');
+					targetRes = resourceCache.get(unified);
+				}
+				if (targetRes == null) {
+					targetRes = resourceCache.get(resName.toLowerCase());
+				}
+			}
+
+			if (targetRes == null) {
+				sendResponse(exchange, 404, "Error: resource not found: " + resName);
+				return;
+			}
+
+			try {
+				// 获取文件内容
+				String content = getResourceContent(targetRes);
+				if (content == null || content.isEmpty()) {
+					sendResponse(exchange, 200, "{\"lines\":[]}");
+					return;
+				}
+
+				// 搜索关键字，返回所有行号
+				List<Integer> lineNumbers = new ArrayList<>();
+				String[] lines = content.split("\\R");
+				String lowerKeyword = keyword.toLowerCase();
+
+				for (int i = 0; i < lines.length; i++) {
+					String line = lines[i].toLowerCase();
+					if (line.contains(lowerKeyword)) {
+						lineNumbers.add(i + 1); // 行号从 1 开始
+					}
+				}
+
+				// 构建 JSON 返回
+				Map<String, Object> result = new HashMap<>();
+				result.put("file", resName);
+				result.put("keyword", keyword);
+				result.put("lines", lineNumbers);
+				result.put("count", lineNumbers.size());
+
+				// 转 JSON（你可以用 GSON，这里手动拼接保证兼容）
+				String json = "{"
+						+ "\"file\":\"" + resName + "\","
+						+ "\"keyword\":\"" + keyword + "\","
+						+ "\"count\":" + lineNumbers.size() + ","
+						+ "\"lines\":" + lineNumbers.toString()
+						+ "}";
+
+				sendResponse(exchange, 200, json);
+
+			} catch (Exception e) {
+				LOG.error("Keyword search failed for: {} in {}", keyword, resName, e);
+				sendResponse(exchange, 500, "Error: search failed: " + e.getMessage());
+			}
 		}
 	}
 }
