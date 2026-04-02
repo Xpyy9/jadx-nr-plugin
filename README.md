@@ -23,36 +23,54 @@ In jadx-cli:
 
 ---
 
-## 📖 API 使用说明 (核心接口)
+## 📖 API
 
-### 1. 系统管理 (System)
-- `GET /status`: 获取插件运行状态及 JADX 核心信息。
-- `POST /cache/clear`: 强制清空类缓存与资源缓存，常用于代码重命名后重新同步数据。
+### 1. 源码探索 (Code Insight)
 
-### 2. 代码提取 (Code & Structure)
-- `GET /getClassCode?class={fullName}&offset=0&limit=50`: 获取类源码。
-- `GET /getClassStructure?class={fullName}`: 获取类成员（字段、方法）声明列表。
-- `GET /getSmaliCode?class={fullName}`: 获取类的 Smali 字节码。
-- `GET /getAllClass?offset=0&limit=50`: 分页列出 App 所有类名。
+| 路由 | 功能说明 | 核心参数 |
+| :--- | :--- | :--- |
+| `/getClassCode` | 获取指定类的 Java 源代码 | `class`, `offset`, `limit` |
+| `/getAllClasses` | 分页列出 APK 中所有的类名 | `offset`, `limit` |
+| `/getClassStructure` | 获取类的成员（字段、方法）声明列表 | `class` |
+| `/getClassSmali` | 获取类的 Smali 字节码 | `class` |
 
-### 3. 追踪与分析 (Reverse Engineering)
-- `GET /getXrefs?class={cls}&method={mth}`: 获取方法调用链。
-- `GET /getXrefs?class={cls}&field={fld}`: 获取字段引用。
-- `GET /getXrefs?class={cls}`: 获取类引用。
-- **注**：返回格式为 `类名 | 方法签名`，单个查询限制 `2000` 条结果以防止 OOM。
+### 2. 资源解析 (Resources)
 
-### 4. 异步搜索任务 (Async Search)
-- `GET /stringSearch?query={keyword}`: 全量源代码字符串搜索。
-- `GET /cryptoScan`: 扫描常见的加密特征（AES, RSA, MD5 等）。
-- `GET /getTaskStatus?id={taskId}`: 获取异步任务结果。
+| 路由 | 功能说明 | 核心参数 |
+| :--- | :--- | :--- |
+| `/getAllResourceNames` | 获取所有资源文件路径列表 | - |
+| `/getResourceFile` | 读取资源文件内容 (XML/JSON/Text) | `name` |
+| `/getMainAppClasses` | 获取主业务包名下的核心类列表 | `offset`, `limit` |
+| `/getMainActivity` | 自动识别并返回入口 Activity 源码 | - |
 
-### 5. 重命名系统 (Refactoring)
-- `POST /renameClass?oldName={old}&newName={new}`: 重构类名。
-- `POST /renameMethod?class={cls}&method={old}&newName={new}`: 重构方法名。
-- `POST /renameField / renameVariable`: 字段与变量重命名。
-- `GET /exportMapping`: 导出当前 Session 的全量混淆映射表。
+### 3. 搜索与侦察 (Search & Recon)
 
-### 6. 资源分析 (Resources)
-- `GET /getMainActivity`: 自动识别 `AndroidManifest.xml` 中的入口 Activity 并返回源码。
-- `GET /getMainApplication`: 自动过滤三方 SDK，仅返回主包名下的业务类。
-- `GET /getSource?name={fileName}`: 获取 XML/JSON/Assets 文本内容（支持 `startLine/endLine`）。
+| 路由 | 功能说明 | 核心参数 |
+| :--- | :--- | :--- |
+| `/searchMethod` | 结构化搜索方法名（不触发反编译） | `name` |
+| `/searchClass` | 搜索类名（支持模糊匹配） | `query` |
+| `/searchString` | **异步**全量源代码字符串搜索 | `query` |
+| `/getXrefs` | 获取类/方法/字段的交叉引用 (Find Usages) | `class`, `method`, `field` |
+| `/scanCrypto` | **异步**扫描加密算法特征指纹 (AES/RSA/MD5) | - |
+
+### 4. 重构与去混淆 (Refactor)
+
+*重命名操作将实时同步并刷新 JADX GUI 视图*
+
+| 路由 | 功能说明 | 核心参数 |
+| :--- | :--- | :--- |
+| `/classRename` | 重命名类 | `oldName`, `newName` |
+| `/methodRename` | 重命名方法 | `class`, `method`, `newName` |
+| `/fieldRename` | 重命名字段 | `class`, `field`, `newName` |
+| `/variableRename` | 重命名方法内的局部变量 | `class`, `method`, `oldName`, `newName` |
+| `/refactorMapping` | 导出当前 Session 所有的重命名映射表 | - |
+
+### 5. 系统与运维 (Basic)
+
+| 路由 | 功能说明 | 备注 |
+| :--- | :--- | :--- |
+| `/cacheClear` | 强制清空类缓存与资源缓存 | 执行大规模重命名后建议调用 |
+| `/systemStatus` | 获取插件运行状态及 JADX 环境信息 | - |
+| `/taskStatus` | 查询异步任务（搜索/扫描）的进度与结果 | `id` (TaskID) |
+
+---
