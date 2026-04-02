@@ -54,7 +54,7 @@ public class SystemStatusHandler implements HttpHandler {
                   "config": {
                     "port": 13997,
                     "cors_enabled": %b,
-                    "version": "1.0.0-Agent-Core"
+                    "version": "0.1.9-Agent-Core"
                   },
                   "resources": {
                     "memory": {

@@ -1,8 +1,8 @@
 package com.nine.ai.jadx.util;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.sun.net.httpserver.HttpExchange;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -12,73 +12,73 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class HttpUtil {
-	private static final Logger LOG = LoggerFactory.getLogger(HttpUtil.class);
-	private static final String CHARSET = StandardCharsets.UTF_8.name();
-	// 单例实例
-	private static final HttpUtil instance = new HttpUtil(true);
-	private final boolean enableCors;
-	private HttpUtil(boolean enableCors) {
-		this.enableCors = enableCors;
+	private static HttpUtil instance;
+	private final Gson gson;
+
+	private HttpUtil() {
+		// 使用 GsonBuilder 可以更灵活地配置，比如处理 HTML 转义
+		this.gson = new GsonBuilder()
+				.disableHtmlEscaping()
+				.create();
 	}
 
-	public static HttpUtil getInstance() {
+	public static synchronized HttpUtil getInstance() {
+		if (instance == null) {
+			instance = new HttpUtil();
+		}
 		return instance;
 	}
 
-	public void sendResponse(HttpExchange exchange, int statusCode, String responseText) throws IOException {
-		if (exchange == null) return;
+	/**
+	 * 将对象转换为 JSON 字符串
+	 */
+	public String toJson(Object obj) {
+		return gson.toJson(obj);
+	}
 
-		// 处理 CORS OPTIONS 预检请求
-		if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
-			if (enableCors) {
-				exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-				exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-				exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+	/**
+	 * 解析 URL 参数
+	 */
+	public Map<String, String> parseParams(String query) {
+		Map<String, String> result = new HashMap<>();
+		if (query == null || query.isEmpty()) {
+			return result;
+		}
+		String[] pairs = query.split("&");
+		for (String pair : pairs) {
+			int idx = pair.indexOf("=");
+			try {
+				String key = idx > 0 ? URLDecoder.decode(pair.substring(0, idx), StandardCharsets.UTF_8) : pair;
+				String value = idx > 0 && pair.length() > idx + 1
+						? URLDecoder.decode(pair.substring(idx + 1), StandardCharsets.UTF_8) : "";
+				result.put(key, value);
+			} catch (Exception e) {
+				// 解码失败跳过
 			}
+		}
+		return result;
+	}
+
+	/**
+	 * 发送响应
+	 */
+	public void sendResponse(HttpExchange exchange, int statusCode, String content) throws IOException {
+		byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+		// 设置跨域和内容类型
+		exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
+		exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+		exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+		exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+		if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
 			exchange.sendResponseHeaders(204, -1);
-			exchange.close();
 			return;
 		}
 
-		// 防空指针保护
-		String safeResponse = responseText == null ? "" : responseText;
-		byte[] bytes = safeResponse.getBytes(StandardCharsets.UTF_8);
-		String contentType = "text/plain; charset=utf-8";
-		String trimRes = safeResponse.trim();
-		if (trimRes.startsWith("{") || trimRes.startsWith("[")) {
-			contentType = "application/json; charset=utf-8";
+		exchange.sendResponseHeaders(statusCode, bytes.length);
+		try (OutputStream os = exchange.getResponseBody()) {
+			os.write(bytes);
 		}
-		exchange.getResponseHeaders().set("Content-Type", contentType);
-
-		if (enableCors) {
-			exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-		}
-
-		try {
-			exchange.sendResponseHeaders(statusCode, bytes.length);
-			try (OutputStream os = exchange.getResponseBody()) {
-				os.write(bytes);
-			}
-		} finally {
-			exchange.close();
-		}
-	}
-
-	public Map<String, String> parseParams(String query) {
-		Map<String, String> params = new HashMap<>();
-		if (query == null || query.isEmpty()) return params;
-
-		try {
-			for (String s : query.split("&")) {
-				if (s.isEmpty()) continue;
-				String[] part = s.split("=", 2);
-				String k = URLDecoder.decode(part[0], CHARSET).trim();
-				String v = part.length > 1 ? URLDecoder.decode(part[1], CHARSET).trim() : "";
-				params.put(k, v);
-			}
-		} catch (Exception e) {
-			LOG.error("Parse params error", e);
-		}
-		return params;
 	}
 }

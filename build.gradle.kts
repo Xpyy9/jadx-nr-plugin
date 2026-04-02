@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.nine.ai.jadx"
-version = System.getenv("VERSION") ?: "0.0.9"
+version = System.getenv("VERSION") ?: "0.1.9"
 
 repositories {
 	mavenCentral()
@@ -14,8 +14,8 @@ repositories {
 }
 
 java {
-	sourceCompatibility = JavaVersion.VERSION_11
-	targetCompatibility = JavaVersion.VERSION_11
+	sourceCompatibility = JavaVersion.VERSION_17
+	targetCompatibility = JavaVersion.VERSION_17
 	// 优化：统一编码，避免中文乱码
 	withSourcesJar() // 保留源码包（不新增功能，仅完善Java配置）
 }
@@ -31,6 +31,7 @@ dependencies {
 	// 添加你需要的 HTTP 库（如 OkHttp），这个会打入最终的 shadowJar
 	implementation("com.squareup.okhttp3:okhttp:4.12.0")
 	implementation("ch.qos.logback:logback-classic:1.5.16")
+	implementation("com.google.code.gson:gson:2.10.1")
 
 	// 测试相关
 	testImplementation("org.junit.jupiter:junit-jupiter:5.12.1")
