@@ -23,11 +23,11 @@ public class SmaliHandler implements HttpHandler {
 		}
 
 		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-		String name = params.get("name");
+		String name = params.get("class_name");
 
 		// 修复参数名提示 Bug，统一使用 'name'
 		if (name == null || name.isBlank()) {
-			http.sendResponse(exchange, 400, "Missing required parameter 'name'");
+			http.sendResponse(exchange, 400, "Missing required parameter 'class_name'");
 			return;
 		}
 

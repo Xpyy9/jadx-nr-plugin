@@ -38,12 +38,12 @@ public class SourceHandler implements HttpHandler {
 		}
 
 		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-		String fileName = params.get("name");
+		String fileName = params.get("file_name");
 		String startLine = params.get("startLine");
 		String endLine = params.get("endLine");
 
 		if (fileName == null || fileName.isBlank()) {
-			sendErrorJson(exchange, 400, "Missing required parameter: name");
+			sendErrorJson(exchange, 400, "Missing required parameter: file_name");
 			return;
 		}
 

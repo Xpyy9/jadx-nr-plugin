@@ -81,31 +81,36 @@ public class PluginServer {
 			server.createContext("/getAllClasses", wrap(new AllClassHandler()));
 			server.createContext("/getClassStructure", wrap(new ClassStructureHandler()));
 			server.createContext("/getClassSmali", wrap(new SmaliHandler()));
+			server.createContext("/codeInsight", wrap(new CodeInsightHandler())); // 合并接口
 
 			// 2. 资源解析 (Resources)
 			server.createContext("/getAllResourceNames", wrap(new AllResourceFileNameHandler()));
 			server.createContext("/getResourceFile", wrap(new SourceHandler()));
 			server.createContext("/getMainAppClasses", wrap(new MainApplicationHandler()));
 			server.createContext("/getMainActivity", wrap(new MainActivityHandler()));
+			server.createContext("/resourceExplorer", wrap(new ResourceExplorerHandler())); //合并接口
 
 			// 3. 搜索与侦察 (Search & Recon)
 			server.createContext("/searchMethod", wrap(new MethodSearchHandler()));
 			server.createContext("/searchClass", wrap(new ClassSearchHandler()));
 			server.createContext("/searchString", wrap(new StringSearchHandler()));
-			server.createContext("/getXrefs", wrap(new XrefsHandler()));
 			server.createContext("/scanCrypto", wrap(new CryptoScanHandler()));
+			server.createContext("/searchEngine", wrap(new SearchEngineHandler())); // 合并接口
+			server.createContext("/getXrefs", wrap(new XrefsHandler()));
 
 			// 4. 重构与去混淆 (Refactor)
 			server.createContext("/classRename", wrap(new ClassRenameHandler(mainWindow)));
 			server.createContext("/methodRename", wrap(new MethodRenameHandler(mainWindow)));
 			server.createContext("/fieldRename", wrap(new FieldRenameHandler(mainWindow)));
 			server.createContext("/variableRename", wrap(new VariableRenameHandler(mainWindow)));
+			server.createContext("/refactor", wrap(new RefactorHandler(mainWindow))); // 合并接口
 
 			// 5. 系统与运维 (Basic)
 			server.createContext("/cacheClear", wrap(new ClearCacheHandler()));
 			server.createContext("/systemStatus", wrap(new SystemStatusHandler()));
 			server.createContext("/refactorMapping", wrap(new MappingExportHandler()));
 			server.createContext("/taskStatus", wrap(new TaskStatusHandler()));
+			server.createContext("/systemManager", wrap(new SystemManagerHandler())); // 合并接口
 
 			server.start();
 			this.startTime = System.currentTimeMillis();

@@ -27,10 +27,10 @@ public class ClassHandler implements HttpHandler {
 		}
 
 		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-		String name = params.get("name");
+		String name = params.get("code_name");
 
 		if (name == null || name.isBlank()) {
-			http.sendResponse(exchange, 400, "Missing name parameter");
+			http.sendResponse(exchange, 400, "Missing code_name parameter");
 			return;
 		}
 

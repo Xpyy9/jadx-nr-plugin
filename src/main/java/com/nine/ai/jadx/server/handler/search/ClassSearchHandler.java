@@ -36,14 +36,13 @@ public class ClassSearchHandler implements HttpHandler {
 		}
 
 		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-		// 修复参数不一致 Bug：统一使用 search_term
-		String searchTerm = params.get("search_term");
+		String searchTerm = params.get("class_name");
 		String packageFilter = params.get("package");
 		String searchIn = params.get("search_in");
 
 		// 参数校验
 		if (searchTerm == null || searchTerm.isBlank()) {
-			sendError(exchange, 400, "Missing required parameter: search_term");
+			sendError(exchange, 400, "Missing required parameter: class_name");
 			return;
 		}
 

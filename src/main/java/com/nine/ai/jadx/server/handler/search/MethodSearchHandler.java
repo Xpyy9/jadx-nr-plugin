@@ -31,10 +31,10 @@ public class MethodSearchHandler implements HttpHandler {
 		}
 
 		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-		String methodName = params.get("name");
+		String methodName = params.get("method_name");
 
 		if (methodName == null || methodName.isBlank()) {
-			sendError(exchange, 400, "Missing required parameter: name");
+			sendError(exchange, 400, "Missing required parameter: method_name");
 			return;
 		}
 
