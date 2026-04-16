@@ -35,7 +35,7 @@ public class RefactorHandler implements HttpHandler {
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
 		if (!PluginServer.getInstance().isRunning()) {
-			http.sendResponse(exchange, 503, "Service unavailable");
+			http.sendError(exchange, 503, "Service unavailable");
 			return;
 		}
 
@@ -44,7 +44,7 @@ public class RefactorHandler implements HttpHandler {
 			String action = params.get("action");
 
 			if (action == null || action.isBlank()) {
-				http.sendResponse(exchange, 400, "Missing required parameter: 'action'");
+				http.sendError(exchange, 400, "Missing required parameter: 'action'");
 				return;
 			}
 
@@ -65,11 +65,11 @@ public class RefactorHandler implements HttpHandler {
 					mappingExportHandler.handle(exchange);
 					break;
 				default:
-					http.sendResponse(exchange, 400, "Invalid action: " + action);
+					http.sendError(exchange, 400, "Invalid action: " + action);
 			}
 		} catch (Exception e) {
 			logger.error("Refactor Dispatcher failed", e);
-			http.sendResponse(exchange, 500, "Dispatcher Error: " + e.getMessage());
+			http.sendError(exchange, 500, "Dispatcher Error: " + e.getMessage());
 		}
 	}
 }

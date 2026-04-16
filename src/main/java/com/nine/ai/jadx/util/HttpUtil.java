@@ -60,25 +60,48 @@ public class HttpUtil {
 	}
 
 	/**
-	 * 发送响应
+	 * 发送响应（CORS 已由 PluginServer.wrap() 统一处理）
 	 */
 	public void sendResponse(HttpExchange exchange, int statusCode, String content) throws IOException {
 		byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
-
-		// 设置跨域和内容类型
 		exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-		exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
-		exchange.getResponseHeaders().set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-		exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
-		if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
-			exchange.sendResponseHeaders(204, -1);
-			return;
-		}
-
 		exchange.sendResponseHeaders(statusCode, bytes.length);
 		try (OutputStream os = exchange.getResponseBody()) {
 			os.write(bytes);
+		}
+	}
+
+	/**
+	 * 发送标准化 JSON 错误响应
+	 */
+	public void sendError(HttpExchange exchange, int statusCode, String message) throws IOException {
+		String json = "{\"error\":\"" + escapeJson(message) + "\",\"source\":\"jadx-plugin\"}";
+		sendResponse(exchange, statusCode, json);
+	}
+
+	/**
+	 * JSON 字符串安全转义（完整处理所有控制字符）
+	 */
+	public static String escapeJson(String s) {
+		if (s == null) return "";
+		return s.replace("\\", "\\\\")
+				.replace("\"", "\\\"")
+				.replace("\n", "\\n")
+				.replace("\r", "\\r")
+				.replace("\t", "\\t")
+				.replace("\b", "\\b")
+				.replace("\f", "\\f");
+	}
+
+	/**
+	 * 安全解析整数参数
+	 */
+	public static int parseInt(String s, int defaultValue) {
+		if (s == null || s.isBlank()) return defaultValue;
+		try {
+			return Integer.parseInt(s.trim());
+		} catch (NumberFormatException e) {
+			return defaultValue;
 		}
 	}
 }

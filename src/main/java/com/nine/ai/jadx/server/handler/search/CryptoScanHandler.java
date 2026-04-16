@@ -33,21 +33,10 @@ public class CryptoScanHandler implements HttpHandler {
 					return;
 				}
 
-				// 执行耗时的全量指纹扫描
 				List<Map<String, String>> suspects = FingerprintUtil.scanCryptoHinter(decompiler.getClassesWithInners());
 				logger.info("Crypto scan task {} completed successfully. Found {} suspects.", taskId, suspects.size());
 
-				// 转换为 JSON 结果
-				StringBuilder sb = new StringBuilder("[");
-				for (int i = 0; i < suspects.size(); i++) {
-					Map<String, String> item = suspects.get(i);
-					sb.append(String.format("{\"class\":\"%s\", \"hint\":\"%s\"}",
-							item.get("class"), item.get("hint")));
-					if (i < suspects.size() - 1) sb.append(",");
-				}
-				sb.append("]");
-
-				TaskManager.updateTask(taskId, "SUCCESS", sb.toString());
+				TaskManager.updateTask(taskId, "SUCCESS", http.toJson(suspects));
 			} catch (Exception e) {
 				logger.error("Async crypto scan task {} encountered a critical error", taskId, e);
 				TaskManager.updateTask(taskId, "FAILED", e.getMessage());

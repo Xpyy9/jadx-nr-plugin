@@ -17,7 +17,7 @@ public class TaskStatusHandler implements HttpHandler {
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
 		if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-			http.sendResponse(exchange, 405, "{\"error\":\"Only GET allowed\"}");
+			http.sendError(exchange, 405, "Only GET allowed");
 			return;
 		}
 
@@ -26,17 +26,16 @@ public class TaskStatusHandler implements HttpHandler {
 			String taskId = params.get("task_id");
 
 			if (taskId == null || taskId.isBlank()) {
-				http.sendResponse(exchange, 400, "{\"error\":\"Missing task_id parameter\"}");
+				http.sendError(exchange, 400, "Missing task_id parameter");
 				return;
 			}
 
 			TaskManager.TaskStatus task = TaskManager.getTask(taskId);
 			if (task == null) {
-				http.sendResponse(exchange, 404, "{\"error\":\"Task not found or expired\"}");
+				http.sendError(exchange, 404, "Task not found or expired");
 				return;
 			}
 
-			// 返回任务当前快照
 			StringBuilder json = new StringBuilder();
 			json.append("{");
 			json.append("\"task_id\":\"").append(taskId).append("\",");
@@ -45,10 +44,9 @@ public class TaskStatusHandler implements HttpHandler {
 			json.append("\"timestamp\":").append(task.timestamp);
 
 			if ("SUCCESS".equals(task.status) && task.result != null) {
-				// 假设结果已经是格式化好的 JSON 字符串
 				json.append(",\"result\":").append(task.result);
 			} else if ("FAILED".equals(task.status)) {
-				json.append(",\"error\":\"").append(task.result != null ? escapeJson(task.result.toString()) : "Unknown error").append("\"");
+				json.append(",\"error\":\"").append(task.result != null ? HttpUtil.escapeJson(task.result.toString()) : "Unknown error").append("\"");
 			}
 			json.append("}");
 
@@ -56,11 +54,7 @@ public class TaskStatusHandler implements HttpHandler {
 
 		} catch (Exception e) {
 			logger.error("Error checking task status", e);
-			http.sendResponse(exchange, 500, "{\"error\":\"Internal server error\"}");
+			http.sendError(exchange, 500, "Internal server error");
 		}
-	}
-
-	private String escapeJson(String s) {
-		return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
 	}
 }

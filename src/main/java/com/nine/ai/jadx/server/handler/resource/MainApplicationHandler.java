@@ -27,20 +27,20 @@ public class MainApplicationHandler implements HttpHandler {
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
 		if (!PluginServer.getInstance().isRunning()) {
-			http.sendResponse(exchange, 503, "Service unavailable");
+			http.sendError(exchange, 503, "Service unavailable");
 			return;
 		}
 
 		JadxDecompiler decompiler = JadxUtil.getDecompiler();
 		if (decompiler == null) {
-			http.sendResponse(exchange, 500, "Decompiler not available");
+			http.sendError(exchange, 500, "Decompiler not available");
 			return;
 		}
 
 		// 解析分页参数
 		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-		int offset = Integer.parseInt(params.getOrDefault("offset", "0"));
-		int limit = Integer.parseInt(params.getOrDefault("limit", "100"));
+		int offset = HttpUtil.parseInt(params.getOrDefault("offset", "0"), 0);
+		int limit = HttpUtil.parseInt(params.getOrDefault("limit", "100"), 100);
 
 		try {
 			// 1. 获取 AndroidManifest.xml
@@ -49,7 +49,7 @@ public class MainApplicationHandler implements HttpHandler {
 					.findFirst().orElse(null);
 
 			if (manifestRes == null) {
-				http.sendResponse(exchange, 404, "AndroidManifest.xml not found");
+				http.sendError(exchange, 404, "AndroidManifest.xml not found");
 				return;
 			}
 
@@ -58,7 +58,7 @@ public class MainApplicationHandler implements HttpHandler {
 			// 2. 提取主包名 (Package Name)
 			String packageName = extractPackageName(xml);
 			if (packageName.isEmpty()) {
-				http.sendResponse(exchange, 404, "Could not identify package name from Manifest");
+				http.sendError(exchange, 404, "Could not identify package name from Manifest");
 				return;
 			}
 
@@ -90,7 +90,7 @@ public class MainApplicationHandler implements HttpHandler {
 
 		} catch (Exception e) {
 			logger.error("Failed to fetch Main Application classes", e);
-			http.sendResponse(exchange, 500, "Internal error: " + e.getMessage());
+			http.sendError(exchange, 500, "Internal error: " + e.getMessage());
 		}
 	}
 

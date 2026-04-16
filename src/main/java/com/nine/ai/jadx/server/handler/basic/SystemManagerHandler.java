@@ -18,11 +18,12 @@ public class SystemManagerHandler implements HttpHandler {
 	private final HttpHandler clearCacheHandler = new ClearCacheHandler();
 	private final HttpHandler systemStatusHandler = new SystemStatusHandler();
 	private final HttpHandler taskStatusHandler = new TaskStatusHandler();
+	private final HttpHandler apkOverviewHandler = new ApkOverviewHandler();
 
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
 		if (!PluginServer.getInstance().isRunning()) {
-			http.sendResponse(exchange, 503, "Service unavailable");
+			http.sendError(exchange, 503, "Service unavailable");
 			return;
 		}
 
@@ -31,7 +32,7 @@ public class SystemManagerHandler implements HttpHandler {
 			String action = params.get("action");
 
 			if (action == null || action.isBlank()) {
-				http.sendResponse(exchange, 400, "Missing required parameter: 'action'");
+				http.sendError(exchange, 400, "Missing required parameter: 'action'");
 				return;
 			}
 
@@ -45,12 +46,15 @@ public class SystemManagerHandler implements HttpHandler {
 				case "taskStatus":
 					taskStatusHandler.handle(exchange);
 					break;
+				case "getApkOverview":
+					apkOverviewHandler.handle(exchange);
+					break;
 				default:
-					http.sendResponse(exchange, 400, "Invalid system action: " + action);
+					http.sendError(exchange, 400, "Invalid system action: " + action);
 			}
 		} catch (Exception e) {
 			logger.error("System Dispatcher Error", e);
-			http.sendResponse(exchange, 500, "Internal Server Error: " + e.getMessage());
+			http.sendError(exchange, 500, "Internal Server Error: " + e.getMessage());
 		}
 	}
 }

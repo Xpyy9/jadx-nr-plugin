@@ -9,6 +9,7 @@ import jadx.api.JadxDecompiler;
 import jadx.api.JavaClass;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class SmaliHandler implements HttpHandler {
@@ -18,7 +19,7 @@ public class SmaliHandler implements HttpHandler {
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
 		if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-			http.sendResponse(exchange, 405, "Only GET allowed");
+			http.sendError(exchange, 405, "Only GET allowed");
 			return;
 		}
 
@@ -27,13 +28,13 @@ public class SmaliHandler implements HttpHandler {
 
 		// 修复参数名提示 Bug，统一使用 'name'
 		if (name == null || name.isBlank()) {
-			http.sendResponse(exchange, 400, "Missing required parameter 'class_name'");
+			http.sendError(exchange, 400, "Missing required parameter 'class_name'");
 			return;
 		}
 
 		JadxDecompiler decompiler = JadxUtil.getDecompiler();
 		if (decompiler == null) {
-			http.sendResponse(exchange, 500, "Decompiler not available");
+			http.sendError(exchange, 500, "Decompiler not available");
 			return;
 		}
 
@@ -42,7 +43,7 @@ public class SmaliHandler implements HttpHandler {
 			JavaClass targetClass = CodeUtil.findClass(cache, name);
 
 			if (targetClass == null) {
-				http.sendResponse(exchange, 404, "Class not found: " + name);
+				http.sendError(exchange, 404, "Class not found: " + name);
 				return;
 			}
 			String smaliCode = targetClass.getSmali();
@@ -50,10 +51,14 @@ public class SmaliHandler implements HttpHandler {
 				smaliCode = "# [WARNING] JADX failed to generate Smali code for this class. The Dex data might be corrupted.";
 			}
 
-			http.sendResponse(exchange, 200, smaliCode);
+			Map<String, Object> result = new LinkedHashMap<>();
+			result.put("type", "smali");
+			result.put("class_name", name);
+			result.put("code", smaliCode);
+			http.sendResponse(exchange, 200, http.toJson(result));
 
 		} catch (Exception e) {
-			http.sendResponse(exchange, 500, "# [ERROR] Internal error retrieving smali: " + e.getMessage());
+			http.sendError(exchange, 500, "Internal error retrieving smali: " + e.getMessage());
 		}
 	}
 }

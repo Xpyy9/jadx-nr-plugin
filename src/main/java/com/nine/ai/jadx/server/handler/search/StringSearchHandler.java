@@ -24,14 +24,14 @@ public class StringSearchHandler implements HttpHandler {
 		String query = params.get("query");
 
 		if (query == null || query.isBlank()) {
-			http.sendResponse(exchange, 400, "{\"error\":\"Query parameter is required\"}");
+			http.sendError(exchange, 400, "Query parameter is required");
 			return;
 		}
-		if (SEARCH_CACHE.containsKey(query)) {
+		List<String> cached = SEARCH_CACHE.get(query);
+		if (cached != null) {
 			logger.info("String search cache hit for: {}", query);
 			String taskId = TaskManager.createHighLoadTask("STRING_SEARCH");
-			String cachedResult = toJsonArray(SEARCH_CACHE.get(query));
-			TaskManager.updateTask(taskId, "SUCCESS", cachedResult);
+			TaskManager.updateTask(taskId, "SUCCESS", http.toJson(cached));
 
 			String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Result from cache\"}", taskId);
 			http.sendResponse(exchange, 202, response);
@@ -57,11 +57,11 @@ public class StringSearchHandler implements HttpHandler {
 					}
 				}
 				if (SEARCH_CACHE.size() >= MAX_CACHE_ENTRIES) {
-					SEARCH_CACHE.clear(); // 简单清理策略
+					SEARCH_CACHE.clear();
 				}
 				SEARCH_CACHE.put(query, results);
 
-				TaskManager.updateTask(taskId, "SUCCESS", toJsonArray(results));
+				TaskManager.updateTask(taskId, "SUCCESS", http.toJson(results));
 			} catch (Exception e) {
 				logger.error("Async search failed", e);
 				TaskManager.updateTask(taskId, "FAILED", e.getMessage());
@@ -70,15 +70,5 @@ public class StringSearchHandler implements HttpHandler {
 
 		String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Search started\"}", taskId);
 		http.sendResponse(exchange, 202, response);
-	}
-
-	private String toJsonArray(List<String> list) {
-		StringBuilder sb = new StringBuilder("[");
-		for (int i = 0; i < list.size(); i++) {
-			sb.append("\"").append(list.get(i).replace("\"", "\\\"")).append("\"");
-			if (i < list.size() - 1) sb.append(",");
-		}
-		sb.append("]");
-		return sb.toString();
 	}
 }

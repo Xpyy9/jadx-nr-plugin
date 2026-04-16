@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -26,13 +27,13 @@ public class MainActivityHandler implements HttpHandler {
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
 		if (!PluginServer.getInstance().isRunning()) {
-			http.sendResponse(exchange, 503, "Service unavailable");
+			http.sendError(exchange, 503, "Service unavailable");
 			return;
 		}
 
 		JadxDecompiler decompiler = JadxUtil.getDecompiler();
 		if (decompiler == null) {
-			http.sendResponse(exchange, 500, "Decompiler not available");
+			http.sendError(exchange, 500, "Decompiler not available");
 			return;
 		}
 
@@ -43,13 +44,13 @@ public class MainActivityHandler implements HttpHandler {
 					.findFirst().orElse(null);
 
 			if (manifestRes == null) {
-				http.sendResponse(exchange, 404, "AndroidManifest.xml not found");
+				http.sendError(exchange, 404, "AndroidManifest.xml not found");
 				return;
 			}
 
 			String xml = JadxUtil.getResourceContent(manifestRes);
 			if (xml == null || xml.isBlank()) {
-				http.sendResponse(exchange, 500, "Failed to parse AndroidManifest.xml content");
+				http.sendError(exchange, 500, "Failed to parse AndroidManifest.xml content");
 				return;
 			}
 
@@ -58,7 +59,7 @@ public class MainActivityHandler implements HttpHandler {
 			List<String> candidates = findLauncherActivities(xml, pkg);
 
 			if (candidates.isEmpty()) {
-				http.sendResponse(exchange, 404, "No activity with MAIN action and LAUNCHER category found in Manifest");
+				http.sendError(exchange, 404, "No activity with MAIN action and LAUNCHER category found in Manifest");
 				return;
 			}
 
@@ -77,17 +78,21 @@ public class MainActivityHandler implements HttpHandler {
 			}
 
 			if (mainActivityClass == null) {
-				http.sendResponse(exchange, 404, "Found Launcher entries " + candidates + " but failed to get JavaClass source.");
+				http.sendError(exchange, 404, "Found Launcher entries " + candidates + " but failed to get JavaClass source.");
 				return;
 			}
 
 			// 4. 封装结果返回 (与参考代码结构保持一致)
 			String code = mainActivityClass.getCode();
-			http.sendResponse(exchange, 200, "// MainActivity: " + finalName + "\n\n" + code);
+			Map<String, Object> result = new LinkedHashMap<>();
+			result.put("type", "main_activity");
+			result.put("class_name", finalName);
+			result.put("code", code);
+			http.sendResponse(exchange, 200, http.toJson(result));
 
 		} catch (Exception e) {
 			logger.error("Error identifying MainActivity", e);
-			http.sendResponse(exchange, 500, "Internal error: " + e.getMessage());
+			http.sendError(exchange, 500, "Internal error: " + e.getMessage());
 		}
 	}
 

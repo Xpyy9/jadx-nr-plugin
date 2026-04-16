@@ -25,21 +25,12 @@ public class ClearCacheHandler implements HttpHandler {
 	public void handle(HttpExchange exchange) throws IOException {
 		String method = exchange.getRequestMethod();
 		if (!"GET".equalsIgnoreCase(method) && !"POST".equalsIgnoreCase(method)) {
-			sendError(exchange, 405, "Only GET or POST allowed");
+			http.sendError(exchange, 405, "Only GET or POST allowed");
 			return;
 		}
 		try {
-			try {
-				CodeUtil.clearClassCache();
-			} catch (Exception e) {
-				logger.warn("Failed to clear CodeUtil cache", e);
-			}
-
-			try {
-				JadxUtil.clearCaches();
-			} catch (Exception e) {
-				logger.warn("Failed to clear JadxUtil cache", e);
-			}
+			CodeUtil.clearClassCache();
+			JadxUtil.clearCaches();
 			logger.info("Manual cache clear triggered via API.");
 			String json = """
                    {
@@ -51,26 +42,7 @@ public class ClearCacheHandler implements HttpHandler {
 
 		} catch (Exception e) {
 			logger.error("Error clearing cache", e);
-			sendError(exchange, 500, "Internal error: " + e.getMessage());
+			http.sendError(exchange, 500, "Internal error: " + e.getMessage());
 		}
-	}
-
-	private void sendError(HttpExchange exchange, int code, String msg) throws IOException {
-		String json = """
-                {
-                  "error": "%s"
-                }
-                """.formatted(escapeJson(msg));
-		http.sendResponse(exchange, code, json);
-	}
-
-	private String escapeJson(String s) {
-		return s == null ? "" : s.replace("\\", "\\\\")
-				.replace("\"", "\\\"")
-				.replace("\n", "\\n")
-				.replace("\r", "\\r")
-				.replace("\t", "\\t")
-				.replace("\b", "\\b")
-				.replace("\f", "\\f");
 	}
 }

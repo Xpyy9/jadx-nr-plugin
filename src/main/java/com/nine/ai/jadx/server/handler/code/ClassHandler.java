@@ -13,6 +13,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class ClassHandler implements HttpHandler {
@@ -22,7 +23,7 @@ public class ClassHandler implements HttpHandler {
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
 		if (!PluginServer.getInstance().isRunning()) {
-			http.sendResponse(exchange, 503, "Service unavailable");
+			http.sendError(exchange, 503, "Service unavailable");
 			return;
 		}
 
@@ -30,13 +31,13 @@ public class ClassHandler implements HttpHandler {
 		String name = params.get("code_name");
 
 		if (name == null || name.isBlank()) {
-			http.sendResponse(exchange, 400, "Missing code_name parameter");
+			http.sendError(exchange, 400, "Missing code_name parameter");
 			return;
 		}
 
 		JadxDecompiler decompiler = JadxUtil.getDecompiler();
 		if (decompiler == null) {
-			http.sendResponse(exchange, 500, "Decompiler not available");
+			http.sendError(exchange, 500, "Decompiler not available");
 			return;
 		}
 
@@ -92,24 +93,32 @@ public class ClassHandler implements HttpHandler {
 			}
 
 			// 全部落空
-			http.sendResponse(exchange, 404, "Target not found: " + name);
+			http.sendError(exchange, 404, "Target not found: " + name);
 
 		} catch (Exception e) {
 			logger.error("ClassHandler failed", e);
-			http.sendResponse(exchange, 500, "Internal Error: " + e.getMessage());
+			http.sendError(exchange, 500, "Internal Error: " + e.getMessage());
 		}
 	}
 
 	private void sendClassResponse(HttpExchange exchange, JavaClass cls) throws IOException {
 		String code = cls.getCode();
 		if (code == null || code.isEmpty()) code = "/* Decompile failed */";
-		http.sendResponse(exchange, 200, code);
+		Map<String, Object> result = new LinkedHashMap<>();
+		result.put("type", "class");
+		result.put("class_name", cls.getFullName());
+		result.put("code", code);
+		http.sendResponse(exchange, 200, http.toJson(result));
 	}
 
 	private void sendMethodResponse(HttpExchange exchange, JavaMethod mth) throws IOException {
 		String code = mth.getCodeStr();
 		if (code == null || code.isEmpty()) code = "/* Method decompile failed */";
-		http.sendResponse(exchange, 200, "// Method: " + mth.getFullName() + "\n\n" + code);
+		Map<String, Object> result = new LinkedHashMap<>();
+		result.put("type", "method");
+		result.put("method_name", mth.getFullName());
+		result.put("code", code);
+		http.sendResponse(exchange, 200, http.toJson(result));
 	}
 
 	/**

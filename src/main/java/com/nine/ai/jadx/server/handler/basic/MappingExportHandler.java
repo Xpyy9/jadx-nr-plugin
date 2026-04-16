@@ -20,11 +20,6 @@ public class MappingExportHandler implements HttpHandler {
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
 		Map<String, String> mapping = CodeUtil.getRenameMapping();
-		StringBuilder sb = new StringBuilder("{");
-		mapping.forEach((k, v) -> sb.append("\"").append(k).append("\":\"").append(v).append("\","));
-		if (sb.length() > 1) sb.setLength(sb.length() - 1);
-		sb.append("}");
-
-		HttpUtil.getInstance().sendResponse(exchange, 200, sb.toString());
+		HttpUtil.getInstance().sendResponse(exchange, 200, HttpUtil.getInstance().toJson(mapping));
 	}
 }

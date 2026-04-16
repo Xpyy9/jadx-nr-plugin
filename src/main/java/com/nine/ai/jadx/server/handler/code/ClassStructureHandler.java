@@ -13,17 +13,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class ClassStructureHandler implements HttpHandler {
-	// 获取传入类的字段名和方法集合 GET /getClassStructure?class_name=com.example.class
 	private static final Logger logger = LoggerFactory.getLogger(ClassStructureHandler.class);
 	private final HttpUtil httpUtil = HttpUtil.getInstance();
-
-	public ClassStructureHandler() {
-	}
 
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
@@ -32,25 +26,24 @@ public class ClassStructureHandler implements HttpHandler {
 		String className = params.get("class_name");
 
 		if (className == null || className.isBlank()) {
-			httpUtil.sendResponse(exchange, 400, "{\"error\":\"Missing required parameter: class_name\"}");
+			httpUtil.sendError(exchange, 400, "Missing required parameter: class_name");
 			return;
 		}
 
 		try {
 			JadxDecompiler decompiler = JadxUtil.getDecompiler();
 			if (decompiler == null) {
-				httpUtil.sendResponse(exchange, 500, "{\"error\":\"Decompiler not available\"}");
+				httpUtil.sendError(exchange, 500, "Decompiler not available");
 				return;
 			}
 			var cache = CodeUtil.initClassCache(decompiler);
 			JavaClass targetClass = CodeUtil.findClass(cache, className);
 
 			if (targetClass == null) {
-				httpUtil.sendResponse(exchange, 404, "{\"error\":\"Class not found: " + className + "\"}");
+				httpUtil.sendError(exchange, 404, "Class not found: " + className);
 				return;
 			}
 
-			String classFullName = targetClass.getFullName();
 			List<String> fields = new ArrayList<>();
 			for (JavaField field : targetClass.getFields()) {
 				try {
@@ -64,8 +57,7 @@ public class ClassStructureHandler implements HttpHandler {
 			List<String> methods = new ArrayList<>();
 			for (JavaMethod method : targetClass.getMethods()) {
 				try {
-					String methodSig = method.getMethodNode().getMethodInfo().getShortId();
-					methods.add(methodSig);
+					methods.add(method.getMethodNode().getMethodInfo().getShortId());
 				} catch (Exception e) {
 					methods.add(method.getName());
 				}
@@ -73,7 +65,6 @@ public class ClassStructureHandler implements HttpHandler {
 
 			String superClass = "java.lang.Object";
 			List<String> interfaces = new ArrayList<>();
-
 			try {
 				if (targetClass.getClassNode().getSuperClass() != null) {
 					superClass = targetClass.getClassNode().getSuperClass().getObject();
@@ -87,30 +78,18 @@ public class ClassStructureHandler implements HttpHandler {
 				logger.debug("Failed to get superclass/interfaces, using defaults.", e);
 			}
 
-			String json = "{"
-					+ "\"class_name\":\"" + classFullName + "\","
-					+ "\"super_class\":\"" + superClass + "\","
-					+ "\"implements\":" + toJsonArray(interfaces) + ","
-					+ "\"fields\":" + toJsonArray(fields) + ","
-					+ "\"methods\":" + toJsonArray(methods)
-					+ "}";
+			Map<String, Object> result = new LinkedHashMap<>();
+			result.put("class_name", targetClass.getFullName());
+			result.put("super_class", superClass);
+			result.put("implements", interfaces);
+			result.put("fields", fields);
+			result.put("methods", methods);
 
-			httpUtil.sendResponse(exchange, 200, json);
+			httpUtil.sendResponse(exchange, 200, httpUtil.toJson(result));
 
 		} catch (Exception e) {
 			logger.error("Get class structure error", e);
-			httpUtil.sendResponse(exchange, 500, "{\"error\":\"Internal error: " + e.getMessage() + "\"}");
+			httpUtil.sendError(exchange, 500, "Internal error: " + e.getMessage());
 		}
-	}
-
-	private String toJsonArray(List<String> list) {
-		if (list == null || list.isEmpty()) return "[]";
-		StringBuilder sb = new StringBuilder("[");
-		for (int i = 0; i < list.size(); i++) {
-			sb.append("\"").append(list.get(i).replace("\"", "\\\"")).append("\"");
-			if (i < list.size() - 1) sb.append(",");
-		}
-		sb.append("]");
-		return sb.toString();
 	}
 }
