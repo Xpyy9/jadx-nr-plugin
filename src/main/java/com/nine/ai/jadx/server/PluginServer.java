@@ -37,6 +37,7 @@ public class PluginServer {
 	private HttpServer server;
 	private final AtomicBoolean isRunning = new AtomicBoolean(false);
 	private long startTime = 0;
+	private ApkOverviewHandler apkOverviewHandler;
 
 	private PluginServer(JadxGuiContext guiContext, MainWindow mainWindow) {
 		this.guiContext = guiContext;
@@ -76,11 +77,26 @@ public class PluginServer {
 			route("/searchEngine", new SearchEngineHandler());
 			route("/getXrefs", new XrefsHandler());
 			route("/refactor", new RefactorHandler(mainWindow));
-			route("/systemManager", new SystemManagerHandler());
+
+			SystemManagerHandler systemManagerHandler = new SystemManagerHandler();
+			this.apkOverviewHandler = systemManagerHandler.getApkOverviewHandler();
+			route("/systemManager", systemManagerHandler);
 
 			server.start();
 			this.startTime = System.currentTimeMillis();
 			LOG.info("JADX Agent Server started on port {}", PORT);
+
+			// Pre-build the APK overview cache in a background thread
+			// so the server is responsive immediately while data loads
+			Thread preloadThread = new Thread(() -> {
+				try {
+					apkOverviewHandler.preload();
+				} catch (Exception e) {
+					LOG.warn("APK overview preload failed, will rebuild on first request", e);
+				}
+			}, "jadx-apk-overview-preload");
+			preloadThread.setDaemon(true);
+			preloadThread.start();
 
 		} catch (IOException e) {
 			LOG.error("Failed to start server", e);
@@ -157,5 +173,9 @@ public class PluginServer {
 
 	public boolean isCorsEnabled() {
 		return true;
+	}
+
+	public ApkOverviewHandler getApkOverviewHandler() {
+		return apkOverviewHandler;
 	}
 }

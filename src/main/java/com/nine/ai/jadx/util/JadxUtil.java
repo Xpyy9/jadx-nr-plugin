@@ -23,6 +23,13 @@ public class JadxUtil {
 
 	// ====================== 获取反编译器 ======================
 	public static JadxDecompiler getDecompiler() {
+		return getDecompiler(true);
+	}
+
+	/**
+	 * @param logError true = log errors normally; false = silent (for polling loops)
+	 */
+	public static JadxDecompiler getDecompiler(boolean logError) {
 		try {
 			JadxGuiContext guiContext = PluginServer.getInstance().getGuiContext();
 			if (!(guiContext instanceof GuiPluginContext)) {
@@ -43,7 +50,9 @@ public class JadxUtil {
 			Method method = wrapper.getClass().getMethod("getDecompiler");
 			return (JadxDecompiler) method.invoke(wrapper);
 		} catch (Exception e) {
-			LOG.error("获取 JadxDecompiler 失败", e);
+			if (logError) {
+				LOG.error("获取 JadxDecompiler 失败", e);
+			}
 			return null;
 		}
 	}
@@ -81,6 +90,13 @@ public class JadxUtil {
 		}
 		lastCacheUpdate = 0;
 		CodeUtil.clearClassCache();
+
+		// Clear the APK overview cache as well
+		PluginServer server = PluginServer.getInstance();
+		if (server != null && server.getApkOverviewHandler() != null) {
+			server.getApkOverviewHandler().clearCache();
+		}
+
 		LOG.info("JadxUtil 资源与代码缓存已全面清空");
 	}
 

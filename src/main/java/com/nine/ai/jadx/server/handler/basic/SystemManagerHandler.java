@@ -18,7 +18,11 @@ public class SystemManagerHandler implements HttpHandler {
 	private final HttpHandler clearCacheHandler = new ClearCacheHandler();
 	private final HttpHandler systemStatusHandler = new SystemStatusHandler();
 	private final HttpHandler taskStatusHandler = new TaskStatusHandler();
-	private final HttpHandler apkOverviewHandler = new ApkOverviewHandler();
+	private final ApkOverviewHandler apkOverviewHandler = new ApkOverviewHandler();
+
+	public ApkOverviewHandler getApkOverviewHandler() {
+		return apkOverviewHandler;
+	}
 
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
