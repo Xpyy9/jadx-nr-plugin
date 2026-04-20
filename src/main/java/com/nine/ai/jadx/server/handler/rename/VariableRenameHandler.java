@@ -68,27 +68,14 @@ public class VariableRenameHandler implements HttpHandler {
 			}
 
 			Map<String, JavaClass> cache = CodeUtil.initClassCache(decompiler);
-			JavaClass cls = CodeUtil.findClass(cache, className);
+			JavaClass cls = CodeUtil.findClassDeeply(cache, className, decompiler);
 
 			if (cls == null) {
 				httpUtil.sendError(exchange, 404, "Class " + className + " not found.");
 				return;
 			}
 
-			JavaMethod targetMethod = null;
-			for (JavaMethod method : cls.getMethods()) {
-				if (method.getName().equals(methodName)) {
-					if (signature != null) {
-						try {
-							if (!method.getMethodNode().getMethodInfo().getShortId().endsWith(signature)) {
-								continue;
-							}
-						} catch (Exception ignored) {}
-					}
-					targetMethod = method;
-					break;
-				}
-			}
+			JavaMethod targetMethod = CodeUtil.findMethod(cls, methodName + (signature != null ? signature : ""));
 
 			if (targetMethod == null) {
 				httpUtil.sendError(exchange, 404, "Method '" + rawMethodName + "' not found in class " + className);
@@ -135,6 +122,7 @@ public class VariableRenameHandler implements HttpHandler {
 						event.setRenameNode(varNode);
 						event.setResetName(newName.isEmpty());
 						mainWindow.events().send(event);
+						CodeUtil.recordRename(newName, variableName);
 						renamed = true;
 						break;
 					}
@@ -147,7 +135,6 @@ public class VariableRenameHandler implements HttpHandler {
 			}
 
 			try {
-				CodeUtil.clearClassCache();
 				JadxUtil.clearCaches();
 			} catch (Exception e) {
 				logger.warn("Failed to clear caches after renaming variable.", e);

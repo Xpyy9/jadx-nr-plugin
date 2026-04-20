@@ -29,6 +29,9 @@ public class ClassHandler implements HttpHandler {
 
 		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
 		String name = params.get("code_name");
+		if (name == null || name.isBlank()) {
+			name = params.get("class_name");
+		}
 
 		if (name == null || name.isBlank()) {
 			http.sendError(exchange, 400, "Missing code_name parameter");
@@ -44,55 +47,47 @@ public class ClassHandler implements HttpHandler {
 		var cache = CodeUtil.initClassCache(decompiler);
 
 		try {
-			// ========================================================
 			// 场景 1：带括号的精确签名 (如 com.app.Main.func(I)V)
-			// ========================================================
 			if (name.contains("(")) {
 				int parenIndex = name.indexOf('(');
 				int lastDot = name.lastIndexOf('.', parenIndex);
 				if (lastDot > 0) {
 					String className = name.substring(0, lastDot);
 					String methodSig = name.substring(lastDot + 1);
-					JavaClass cls = findClassDeeply(cache, className, decompiler);
+					JavaClass cls = CodeUtil.findClassDeeply(cache, className, decompiler);
 					if (cls != null) {
-						JavaMethod mth = findMethodBySig(cls, methodSig);
+						JavaMethod mth = CodeUtil.findMethodBySig(cls, methodSig);
 						if (mth != null) {
 							sendMethodResponse(exchange, mth);
-							return; // 找到精确方法，立即退出
+							return;
 						}
 					}
 				}
 			}
 
-			// ========================================================
-			// 场景 2：尝试拆分最后一段作为函数名 (如 com.app.Main.onCreate)
-			// 关键：只有当前半部分是类，且后半部分确实是该类方法时才触发
-			// ========================================================
+			// 场景 2：类名.方法名 (如 com.app.Main.onCreate)
 			if (name.contains(".")) {
 				int lastDot = name.lastIndexOf('.');
 				String potentialClassName = name.substring(0, lastDot);
 				String potentialMethodName = name.substring(lastDot + 1);
 
-				JavaClass cls = findClassDeeply(cache, potentialClassName, decompiler);
+				JavaClass cls = CodeUtil.findClassDeeply(cache, potentialClassName, decompiler);
 				if (cls != null) {
-					JavaMethod mth = findMethodByName(cls, potentialMethodName);
+					JavaMethod mth = CodeUtil.findMethod(cls, potentialMethodName);
 					if (mth != null) {
 						sendMethodResponse(exchange, mth);
-						return; // 找到方法，立即退出
+						return;
 					}
 				}
 			}
 
-			// ========================================================
-			// 场景 3：尝试将整个字符串视为一个类 (如 com.app.MainActivity)
-			// ========================================================
-			JavaClass targetClass = findClassDeeply(cache, name, decompiler);
+			// 场景 3：整个字符串视为类名
+			JavaClass targetClass = CodeUtil.findClassDeeply(cache, name, decompiler);
 			if (targetClass != null) {
 				sendClassResponse(exchange, targetClass);
-				return; // 找到类，立即退出
+				return;
 			}
 
-			// 全部落空
 			http.sendError(exchange, 404, "Target not found: " + name);
 
 		} catch (Exception e) {
@@ -119,44 +114,5 @@ public class ClassHandler implements HttpHandler {
 		result.put("method_name", mth.getFullName());
 		result.put("code", code);
 		http.sendResponse(exchange, 200, http.toJson(result));
-	}
-
-	/**
-	 * 深度查找类：处理点号与美元符的歧义
-	 */
-	private JavaClass findClassDeeply(Map<String, JavaClass> cache, String name, JadxDecompiler decompiler) {
-		// 1. 原名查找
-		JavaClass cls = CodeUtil.findClass(cache, name);
-		if (cls != null) return cls;
-
-		// 2. 内部类兼容处理 (将最后一段点号换成$)
-		if (name.contains(".")) {
-			int lastDot = name.lastIndexOf('.');
-			String altName = name.substring(0, lastDot) + "$" + name.substring(lastDot + 1);
-			cls = CodeUtil.findClass(cache, altName);
-			if (cls != null) return cls;
-		}
-
-		// 3. 遍历兜底
-		for (JavaClass jc : decompiler.getClasses()) {
-			if (jc.getFullName().equals(name)) return jc;
-		}
-		return null;
-	}
-
-	private JavaMethod findMethodByName(JavaClass cls, String name) {
-		for (JavaMethod m : cls.getMethods()) {
-			if (m.getName().equals(name)) return m;
-		}
-		return null;
-	}
-
-	private JavaMethod findMethodBySig(JavaClass cls, String sig) {
-		for (JavaMethod m : cls.getMethods()) {
-			try {
-				if (m.getMethodNode().getMethodInfo().getShortId().equals(sig)) return m;
-			} catch (Exception ignored) {}
-		}
-		return null;
 	}
 }

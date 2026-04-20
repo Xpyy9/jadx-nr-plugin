@@ -1,6 +1,10 @@
 package com.nine.ai.jadx.util;
 
 import com.nine.ai.jadx.server.PluginServer;
+import com.nine.ai.jadx.server.handler.search.CryptoScanHandler;
+import com.nine.ai.jadx.server.handler.search.ClassSearchHandler;
+import com.nine.ai.jadx.server.handler.search.MethodSearchHandler;
+import com.nine.ai.jadx.server.handler.search.StringSearchHandler;
 import jadx.api.JadxDecompiler;
 import jadx.api.ResourceFile;
 import jadx.api.plugins.gui.JadxGuiContext;
@@ -21,6 +25,9 @@ public class JadxUtil {
 	private static long lastCacheUpdate = 0;
 	private static final long CACHE_TIMEOUT = 5 * 60 * 1000; // 5分钟
 
+	/** 缓存反射获取的 decompiler 实例（实例在整个 APK 会话中不变） */
+	private static volatile JadxDecompiler cachedDecompiler = null;
+
 	// ====================== 获取反编译器 ======================
 	public static JadxDecompiler getDecompiler() {
 		return getDecompiler(true);
@@ -30,6 +37,12 @@ public class JadxUtil {
 	 * @param logError true = log errors normally; false = silent (for polling loops)
 	 */
 	public static JadxDecompiler getDecompiler(boolean logError) {
+		// 优先返回缓存
+		JadxDecompiler cached = cachedDecompiler;
+		if (cached != null) {
+			return cached;
+		}
+
 		try {
 			JadxGuiContext guiContext = PluginServer.getInstance().getGuiContext();
 			if (!(guiContext instanceof GuiPluginContext)) {
@@ -48,7 +61,12 @@ public class JadxUtil {
 			}
 
 			Method method = wrapper.getClass().getMethod("getDecompiler");
-			return (JadxDecompiler) method.invoke(wrapper);
+			JadxDecompiler decompiler = (JadxDecompiler) method.invoke(wrapper);
+
+			if (decompiler != null) {
+				cachedDecompiler = decompiler; // 缓存成功获取的实例
+			}
+			return decompiler;
 		} catch (Exception e) {
 			if (logError) {
 				LOG.error("获取 JadxDecompiler 失败", e);
@@ -90,6 +108,13 @@ public class JadxUtil {
 		}
 		lastCacheUpdate = 0;
 		CodeUtil.clearClassCache();
+		CodeIndexManager.getInstance().invalidate();
+
+		// 清除搜索相关缓存
+		StringSearchHandler.clearSearchCache();
+		ClassSearchHandler.clearSearchCache();
+		MethodSearchHandler.clearMethodCache();
+		CryptoScanHandler.clearScanCache();
 
 		// Clear the APK overview cache as well
 		PluginServer server = PluginServer.getInstance();
@@ -97,7 +122,7 @@ public class JadxUtil {
 			server.getApkOverviewHandler().clearCache();
 		}
 
-		LOG.info("JadxUtil 资源与代码缓存已全面清空");
+		LOG.info("JadxUtil 全部缓存已清空（资源/代码/索引/搜索）");
 	}
 
 	public static String getResourceContent(ResourceFile res) {

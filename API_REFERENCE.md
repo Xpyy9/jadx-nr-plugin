@@ -443,7 +443,7 @@ GET /searchEngine?action=searchMethod&method_name=<方法名>&offset=<可选>&li
 
 ---
 
-### 4.2 `searchClass` — 按类名/代码搜索（同步，分页）
+### 4.2 `searchClass` — 按类名/代码搜索（分页）
 
 ```
 GET /searchEngine?action=searchClass&class_name=<搜索词>&package=<可选>&search_in=<可选>&offset=<可选>&limit=<可选>
@@ -456,6 +456,12 @@ GET /searchEngine?action=searchClass&class_name=<搜索词>&package=<可选>&sea
 | `search_in` | 否 | `class_name` | 搜索范围，可选: `class_name`, `code`, `class_name,code`（逗号分隔） |
 | `offset` | 否 | 0 | 分页偏移 |
 | `limit` | 否 | 50 | 每页条数（最大 500） |
+
+**行为说明**:
+- `search_in=class_name`（默认）: **同步返回** 200，直接返回结果
+- `search_in=code` 或 `search_in=class_name,code`: **异步返回** 202 + task_id，需轮询获取结果
+
+#### 同步模式（search_in=class_name）
 
 **成功响应** (200):
 ```json
@@ -474,6 +480,19 @@ GET /searchEngine?action=searchClass&class_name=<搜索词>&package=<可选>&sea
   }
 }
 ```
+
+#### 异步模式（search_in 包含 code）
+
+**立即响应** (202):
+```json
+{
+  "status": "ACCEPTED",
+  "task_id": "a1b2c3d4",
+  "message": "Code search started, poll /systemManager?action=taskStatus&task_id=a1b2c3d4"
+}
+```
+
+**轮询策略**: 每 2-3 秒调用 `GET /systemManager?action=taskStatus&task_id=<task_id>`，`status` 变为 `SUCCESS` 时 `result` 字段包含分页结果。
 
 ---
 

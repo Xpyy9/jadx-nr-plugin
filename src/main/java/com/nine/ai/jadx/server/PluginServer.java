@@ -16,7 +16,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -29,6 +31,7 @@ public class PluginServer {
 	private static final int PORT = 13997;
 	private static final int BACKLOG = 10;
 	private static final int THREAD_POOL_SIZE = 5;
+	private static final int ASYNC_POOL_SIZE = 3;
 
 	private static PluginServer instance;
 	private final JadxGuiContext guiContext;
@@ -38,6 +41,21 @@ public class PluginServer {
 	private final AtomicBoolean isRunning = new AtomicBoolean(false);
 	private long startTime = 0;
 	private ApkOverviewHandler apkOverviewHandler;
+
+	/** 专用异步任务线程池，供搜索/扫描等耗时操作使用 */
+	private static final ExecutorService ASYNC_POOL;
+	static {
+		AtomicInteger asyncThreadCount = new AtomicInteger();
+		ASYNC_POOL = Executors.newFixedThreadPool(ASYNC_POOL_SIZE, r -> {
+			Thread t = new Thread(r, "jadx-async-task-" + asyncThreadCount.incrementAndGet());
+			t.setDaemon(true);
+			return t;
+		});
+	}
+
+	public static ExecutorService getAsyncPool() {
+		return ASYNC_POOL;
+	}
 
 	private PluginServer(JadxGuiContext guiContext, MainWindow mainWindow) {
 		this.guiContext = guiContext;
@@ -110,6 +128,12 @@ public class PluginServer {
 			return;
 		}
 		LOG.info("Stopping JADX Agent Server...");
+		ASYNC_POOL.shutdownNow();
+		try {
+			ASYNC_POOL.awaitTermination(3, TimeUnit.SECONDS);
+		} catch (InterruptedException ignored) {
+			Thread.currentThread().interrupt();
+		}
 		if (server != null) {
 			server.stop(2);
 			server = null;
@@ -169,10 +193,6 @@ public class PluginServer {
 
 	public boolean isRunning() {
 		return isRunning.get();
-	}
-
-	public boolean isCorsEnabled() {
-		return true;
 	}
 
 	public ApkOverviewHandler getApkOverviewHandler() {

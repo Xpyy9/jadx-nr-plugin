@@ -37,7 +37,7 @@ public class ClassStructureHandler implements HttpHandler {
 				return;
 			}
 			var cache = CodeUtil.initClassCache(decompiler);
-			JavaClass targetClass = CodeUtil.findClass(cache, className);
+			JavaClass targetClass = CodeUtil.findClassDeeply(cache, className, decompiler);
 
 			if (targetClass == null) {
 				httpUtil.sendError(exchange, 404, "Class not found: " + className);

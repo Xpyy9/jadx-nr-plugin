@@ -1,6 +1,5 @@
 package com.nine.ai.jadx.server.handler.xrefs;
 
-import com.nine.ai.jadx.server.PluginServer;
 import com.nine.ai.jadx.util.CodeUtil;
 import com.nine.ai.jadx.util.HttpUtil;
 import com.nine.ai.jadx.util.JadxUtil;
@@ -9,13 +8,16 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import jadx.api.*;
 import jadx.core.dex.nodes.ClassNode;
-import jadx.core.dex.nodes.FieldNode;
 import jadx.core.dex.nodes.MethodNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.stream.Collectors;
 
 public class XrefsHandler implements HttpHandler {
+	private static final Logger logger = LoggerFactory.getLogger(XrefsHandler.class);
 	private final HttpUtil http = HttpUtil.getInstance();
 	private static final int XREF_HARD_LIMIT = 2000;
 
@@ -44,7 +46,7 @@ public class XrefsHandler implements HttpHandler {
 			}
 
 			Map<String, JavaClass> cache = CodeUtil.initClassCache(decompiler);
-			JavaClass cls = CodeUtil.findClass(cache, clsName);
+			JavaClass cls = CodeUtil.findClassDeeply(cache, clsName, decompiler);
 
 			if (cls == null) {
 				http.sendError(exchange, 404, "Class not found: " + clsName);
@@ -57,23 +59,26 @@ public class XrefsHandler implements HttpHandler {
 
 			if (fieldName != null && !fieldName.isBlank()) {
 				xrefType = "field-xrefs";
-				JavaField targetField = cls.getFields().stream()
-						.filter(f -> fieldName.equals(f.getName()))
-						.findFirst().orElse(null);
+				JavaField targetField = CodeUtil.findField(cls, fieldName);
 
 				if (targetField == null) {
+					List<String> available = cls.getFields().stream()
+							.map(JavaField::getName).collect(Collectors.toList());
+					logger.warn("Field '{}' not found in {}. Available: {}", fieldName, cls.getFullName(), available);
 					http.sendError(exchange, 404, "Field not found: " + fieldName);
 					return;
 				}
 				isOverflow = collectFromNodes(targetField.getFieldNode().getUseIn(), results);
 			} else if (methodName != null && !methodName.isBlank()) {
 				xrefType = "method-xrefs";
-				JavaMethod targetMethod = cls.getMethods().stream()
-						.filter(m -> methodName.equals(m.getName()))
-						.findFirst().orElse(null);
+				JavaMethod targetMethod = CodeUtil.findMethod(cls, methodName);
 
 				if (targetMethod == null) {
-					http.sendError(exchange, 404, "Method not found: " + methodName);
+					List<String> available = cls.getMethods().stream()
+							.map(JavaMethod::getName).collect(Collectors.toList());
+					logger.warn("Method '{}' not found in {}. Available: {}", methodName, cls.getFullName(), available);
+					http.sendError(exchange, 404, "Method not found: " + methodName
+							+ ". Available: " + available);
 					return;
 				}
 				isOverflow = collectFromNodes(targetMethod.getMethodNode().getUseIn(), results);

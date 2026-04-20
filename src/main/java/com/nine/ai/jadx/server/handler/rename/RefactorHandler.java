@@ -41,7 +41,7 @@ public class RefactorHandler implements HttpHandler {
 
 		try {
 			Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-			String action = params.get("action");
+			String action = HttpUtil.sanitizeAction(params.get("action"));
 
 			if (action == null || action.isBlank()) {
 				http.sendError(exchange, 400, "Missing required parameter: 'action'");

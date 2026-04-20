@@ -51,20 +51,14 @@ public class FieldRenameHandler implements HttpHandler {
 			}
 
 			Map<String, JavaClass> cache = CodeUtil.initClassCache(decompiler);
-			JavaClass cls = CodeUtil.findClass(cache, className);
+			JavaClass cls = CodeUtil.findClassDeeply(cache, className, decompiler);
 
 			if (cls == null) {
 				httpUtil.sendError(exchange, 404, "Class " + className + " not found.");
 				return;
 			}
 
-			JavaField targetField = null;
-			for (JavaField field : cls.getFields()) {
-				if (field.getName().equals(fieldName)) {
-					targetField = field;
-					break;
-				}
-			}
+			JavaField targetField = CodeUtil.findField(cls, fieldName);
 
 			if (targetField == null) {
 				httpUtil.sendError(exchange, 404, "Field '" + fieldName + "' not found in class " + className);
@@ -77,9 +71,9 @@ public class FieldRenameHandler implements HttpHandler {
 			event.setResetName(newName.isEmpty());
 
 			mainWindow.events().send(event);
+			CodeUtil.recordRename(newName, targetField.getName());
 
 			try {
-				CodeUtil.clearClassCache();
 				JadxUtil.clearCaches();
 			} catch (Exception e) {
 				logger.warn("Failed to clear caches after renaming field, stale data may exist.", e);

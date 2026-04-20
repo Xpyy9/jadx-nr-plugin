@@ -1,6 +1,5 @@
 package com.nine.ai.jadx.server.handler.basic;
 
-import com.nine.ai.jadx.util.CodeUtil;
 import com.nine.ai.jadx.util.HttpUtil;
 import com.nine.ai.jadx.util.JadxUtil;
 import com.sun.net.httpserver.HttpExchange;
@@ -29,7 +28,8 @@ public class ClearCacheHandler implements HttpHandler {
 			return;
 		}
 		try {
-			CodeUtil.clearClassCache();
+			// JadxUtil.clearCaches() 统一清理所有缓存：
+			// 代码缓存、代码索引、搜索缓存、资源缓存、APK overview 缓存
 			JadxUtil.clearCaches();
 			logger.info("Manual cache clear triggered via API.");
 			String json = """

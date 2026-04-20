@@ -37,7 +37,7 @@ public class HttpUtil {
 	}
 
 	/**
-	 * 解析 URL 参数
+	 * 解析 URL 参数，自动清除 LLM 可能注入的 XML 标签污染
 	 */
 	public Map<String, String> parseParams(String query) {
 		Map<String, String> result = new HashMap<>();
@@ -51,12 +51,25 @@ public class HttpUtil {
 				String key = idx > 0 ? URLDecoder.decode(pair.substring(0, idx), StandardCharsets.UTF_8) : pair;
 				String value = idx > 0 && pair.length() > idx + 1
 						? URLDecoder.decode(pair.substring(idx + 1), StandardCharsets.UTF_8) : "";
-				result.put(key, value);
+				result.put(stripXmlTags(key), stripXmlTags(value));
 			} catch (Exception e) {
 				// 解码失败跳过
 			}
 		}
 		return result;
+	}
+
+	/**
+	 * 清除字符串中的 XML-like 标签及其内容。
+	 * LLM 偶尔在参数中混入 &lt;arg_key&gt;...&lt;/arg_key&gt;&lt;arg_value&gt;...&lt;/arg_value&gt; 等标签。
+	 */
+	private static String stripXmlTags(String s) {
+		if (s == null || !s.contains("<")) return s;
+		// 移除 <tag>content</tag> 模式和自闭合 <tag/> 模式
+		return s.replaceAll("<[^>]+>[^<]*</[^>]+>", "")
+				.replaceAll("<[^>]+/>", "")
+				.replaceAll("<[^>]+>", "")
+				.trim();
 	}
 
 	/**
@@ -91,6 +104,20 @@ public class HttpUtil {
 				.replace("\t", "\\t")
 				.replace("\b", "\\b")
 				.replace("\f", "\\f");
+	}
+
+	/**
+	 * 清洗 action 参数：LLM 可能在 action 值中混入 XML-like 标签或多余内容，
+	 * 仅保留第一个 '&lt;' 之前的纯文本作为真实 action 名。
+	 */
+	public static String sanitizeAction(String raw) {
+		if (raw == null) return null;
+		String s = raw.trim();
+		int lt = s.indexOf('<');
+		if (lt > 0) {
+			s = s.substring(0, lt).trim();
+		}
+		return s.isEmpty() ? null : s;
 	}
 
 	/**

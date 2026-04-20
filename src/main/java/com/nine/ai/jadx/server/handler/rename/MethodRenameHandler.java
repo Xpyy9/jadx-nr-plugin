@@ -30,6 +30,7 @@ public class MethodRenameHandler implements HttpHandler {
 	public void handle(HttpExchange exchange) throws IOException {
 		Map<String, String> params = httpUtil.parseParams(exchange.getRequestURI().getQuery());
 		String rawMethodName = params.get("method_name");
+		String classNameParam = params.get("class_name");
 		String newName = params.get("new_name");
 
 		if (rawMethodName == null || rawMethodName.isBlank() || newName == null || newName.isBlank()) {
@@ -46,14 +47,23 @@ public class MethodRenameHandler implements HttpHandler {
 			fullMethodPath = fullMethodPath.substring(0, sigIdx);
 		}
 
+		String className;
+		String methodName;
+
 		int lastDotIdx = fullMethodPath.lastIndexOf('.');
-		if (lastDotIdx == -1) {
-			httpUtil.sendError(exchange, 400, "Invalid method_name format. Expected: com.example.MyClass.myMethod");
+		if (lastDotIdx != -1) {
+			// method_name 包含完整路径: com.example.MyClass.myMethod
+			className = fullMethodPath.substring(0, lastDotIdx);
+			methodName = fullMethodPath.substring(lastDotIdx + 1);
+		} else if (classNameParam != null && !classNameParam.isBlank()) {
+			// method_name 只有短方法名，从 class_name 参数取类名
+			className = classNameParam;
+			methodName = fullMethodPath;
+		} else {
+			httpUtil.sendError(exchange, 400,
+					"Cannot determine class. Either use full path in method_name (com.example.MyClass.myMethod) or provide class_name parameter.");
 			return;
 		}
-
-		String className = fullMethodPath.substring(0, lastDotIdx);
-		String methodName = fullMethodPath.substring(lastDotIdx + 1);
 
 		try {
 			JadxDecompiler decompiler = JadxUtil.getDecompiler();
@@ -63,27 +73,14 @@ public class MethodRenameHandler implements HttpHandler {
 			}
 
 			Map<String, JavaClass> cache = CodeUtil.initClassCache(decompiler);
-			JavaClass cls = CodeUtil.findClass(cache, className);
+			JavaClass cls = CodeUtil.findClassDeeply(cache, className, decompiler);
 
 			if (cls == null) {
 				httpUtil.sendError(exchange, 404, "Class " + className + " not found.");
 				return;
 			}
 
-			JavaMethod targetMethod = null;
-			for (JavaMethod method : cls.getMethods()) {
-				if (method.getName().equals(methodName)) {
-					if (signature != null) {
-						try {
-							if (!method.getMethodNode().getMethodInfo().getShortId().endsWith(signature)) {
-								continue;
-							}
-						} catch (Exception ignored) {}
-					}
-					targetMethod = method;
-					break;
-				}
-			}
+			JavaMethod targetMethod = CodeUtil.findMethod(cls, methodName + (signature != null ? signature : ""));
 
 			if (targetMethod == null) {
 				httpUtil.sendError(exchange, 404, "Method '" + methodName + "' not found in class " + className);
@@ -96,9 +93,9 @@ public class MethodRenameHandler implements HttpHandler {
 			event.setResetName(newName.isEmpty());
 
 			mainWindow.events().send(event);
+			CodeUtil.recordRename(newName, targetMethod.getName());
 
 			try {
-				CodeUtil.clearClassCache();
 				JadxUtil.clearCaches();
 			} catch (Exception e) {
 				logger.warn("Failed to clear caches after renaming method, stale data may exist.", e);

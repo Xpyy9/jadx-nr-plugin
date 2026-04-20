@@ -4,14 +4,27 @@ import java.util.Comparator;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class TaskManager {
 	private static final Map<String, TaskStatus> tasks = new ConcurrentHashMap<>();
 	private static final long TASK_EXPIRE_MS = 30 * 60 * 1000; // 30 分钟过期
 	private static final int MAX_TASKS = 200;
 
+	/** 定时清理线程：每 5 分钟清理过期任务 */
+	private static final ScheduledExecutorService CLEANER;
+	static {
+		CLEANER = Executors.newSingleThreadScheduledExecutor(r -> {
+			Thread t = new Thread(r, "jadx-task-cleaner");
+			t.setDaemon(true);
+			return t;
+		});
+		CLEANER.scheduleAtFixedRate(TaskManager::cleanExpiredTasks, 5, 5, TimeUnit.MINUTES);
+	}
+
 	public static String createHighLoadTask(String type) {
-		cleanExpiredTasks();
 		String taskId = UUID.randomUUID().toString().substring(0, 8);
 		tasks.put(taskId, new TaskStatus(type, "RUNNING"));
 		return taskId;

@@ -44,7 +44,7 @@ public class ClassRenameHandler implements HttpHandler {
 			}
 
 			Map<String, JavaClass> cache = CodeUtil.initClassCache(decompiler);
-			JavaClass cls = CodeUtil.findClass(cache, className);
+			JavaClass cls = CodeUtil.findClassDeeply(cache, className, decompiler);
 
 			if (cls == null) {
 				httpUtil.sendError(exchange, 404, "Class " + className + " not found.");
@@ -59,7 +59,6 @@ public class ClassRenameHandler implements HttpHandler {
 			mainWindow.events().send(event);
 			CodeUtil.recordRename(newName, cls.getName());
 			try {
-				CodeUtil.clearClassCache();
 				JadxUtil.clearCaches();
 			} catch (Exception e) {
 				logger.warn("Failed to clear caches after renaming, stale data may exist.", e);

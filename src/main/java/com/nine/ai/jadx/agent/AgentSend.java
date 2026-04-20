@@ -1,5 +1,7 @@
 package com.nine.ai.jadx.agent;
 
+import com.nine.ai.jadx.util.HttpUtil;
+
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -50,8 +52,8 @@ public class AgentSend {
 			try {
 				String jsonPayload = String.format(
 						"{\"context\":\"%s\", \"code\":\"%s\"}",
-						escapeJson(contextName),
-						escapeJson(selectedText)
+						HttpUtil.escapeJson(contextName),
+						HttpUtil.escapeJson(selectedText)
 				);
 
 				sendToAgent(apiUrl, jsonPayload);
@@ -110,14 +112,4 @@ public class AgentSend {
 		});
 	}
 
-	private String escapeJson(String input) {
-		if (input == null) return "";
-		return input.replace("\\", "\\\\")
-				.replace("\"", "\\\"")
-				.replace("\b", "\\b")
-				.replace("\f", "\\f")
-				.replace("\n", "\\n")
-				.replace("\r", "\\r")
-				.replace("\t", "\\t");
-	}
 }

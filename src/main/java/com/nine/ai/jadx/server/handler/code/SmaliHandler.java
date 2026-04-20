@@ -40,7 +40,7 @@ public class SmaliHandler implements HttpHandler {
 
 		try {
 			var cache = CodeUtil.initClassCache(decompiler);
-			JavaClass targetClass = CodeUtil.findClass(cache, name);
+			JavaClass targetClass = CodeUtil.findClassDeeply(cache, name, decompiler);
 
 			if (targetClass == null) {
 				http.sendError(exchange, 404, "Class not found: " + name);
