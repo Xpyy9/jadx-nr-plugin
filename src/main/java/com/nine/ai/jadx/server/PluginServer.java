@@ -30,8 +30,8 @@ public class PluginServer {
 	private static final Logger LOG = LoggerFactory.getLogger(PluginServer.class);
 	private static final int PORT = 13997;
 	private static final int BACKLOG = 10;
-	private static final int THREAD_POOL_SIZE = 5;
-	private static final int ASYNC_POOL_SIZE = 3;
+	private static final int THREAD_POOL_SIZE = 10;
+	private static final int ASYNC_POOL_SIZE = 6;
 
 	private static PluginServer instance;
 	private final JadxGuiContext guiContext;

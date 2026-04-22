@@ -49,6 +49,9 @@ public class SearchEngineHandler implements HttpHandler {
 				case "scanCrypto":
 					cryptoScanHandler.handle(exchange);
 					break;
+				case "smartSearch":
+					SmartSearchHandler.handle(exchange);
+					break;
 				default:
 					http.sendError(exchange, 400, "Invalid search action: " + action);
 			}

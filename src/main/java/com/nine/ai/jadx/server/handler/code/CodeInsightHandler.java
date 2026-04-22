@@ -48,6 +48,15 @@ public class CodeInsightHandler implements HttpHandler {
 				case "getClassSmali":
 					smaliHandler.handle(exchange);
 					break;
+				case "getClassWithStructure":
+					CompositeHandler.handleClassWithStructure(exchange);
+					break;
+				case "batchGetClassCode":
+					CompositeHandler.handleBatchGetClassCode(exchange);
+					break;
+				case "getMethodWithCallers":
+					CompositeHandler.handleMethodWithCallers(exchange);
+					break;
 				default:
 					http.sendError(exchange, 400, "Invalid action: " + action);
 			}

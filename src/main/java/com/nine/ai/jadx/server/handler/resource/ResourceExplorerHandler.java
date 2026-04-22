@@ -49,6 +49,12 @@ public class ResourceExplorerHandler implements HttpHandler {
 				case "getResourceFile":
 					resourceFileHandler.handle(exchange);
 					break;
+				case "getManifestDetail":
+					new ManifestDetailHandler().handle(exchange);
+					break;
+				case "searchResourceContent":
+					new ResourceSearchHandler().handle(exchange);
+					break;
 				default:
 					http.sendError(exchange, 400, "Invalid resource action: " + action);
 			}
