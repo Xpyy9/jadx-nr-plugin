@@ -12,12 +12,15 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * 加密扫描 — CodeIndex 就绪时同步返回 200，否则走异步 202。
+ */
 public class CryptoScanHandler implements HttpHandler {
 	private static final Logger logger = LoggerFactory.getLogger(CryptoScanHandler.class);
 	private final HttpUtil http = HttpUtil.getInstance();
 
-	/** 缓存扫描结果 JSON，APK 不变时结果一致 */
-	private static volatile String cachedResult = null;
+	/** 缓存扫描结果，APK 不变时结果一致 */
+	private static volatile List<Map<String, String>> cachedResult = null;
 
 	public static void clearScanCache() {
 		cachedResult = null;
@@ -25,45 +28,62 @@ public class CryptoScanHandler implements HttpHandler {
 
 	@Override
 	public void handle(HttpExchange exchange) throws IOException {
-		String taskId = TaskManager.createHighLoadTask("CRYPTO_SCAN");
-
-		// 命中缓存：立即返回
-		String cached = cachedResult;
+		// 缓存命中 → 同步返回
+		List<Map<String, String>> cached = cachedResult;
 		if (cached != null) {
-			logger.info("Crypto scan cache hit, task: {}", taskId);
-			TaskManager.updateTask(taskId, "SUCCESS", cached);
-			String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Result from cache\"}", taskId);
-			http.sendResponse(exchange, 202, response);
+			logger.info("Crypto scan cache hit");
+			http.sendResponse(exchange, 200, http.toJson(cached));
 			return;
 		}
 
-		logger.info("Started background crypto scan task: {}", taskId);
+		// CodeIndex 已就绪 → 同步扫描
+		CodeIndexManager indexManager = CodeIndexManager.getInstance();
+		if (indexManager.isIndexed()) {
+			try {
+				JadxDecompiler decompiler = JadxUtil.getDecompiler();
+				if (decompiler == null) {
+					http.sendError(exchange, 500, "Decompiler not available");
+					return;
+				}
+
+				Map<String, String> codeIndex = indexManager.getIndex(decompiler);
+				List<Map<String, String>> suspects = FingerprintUtil.scanCryptoFromIndex(codeIndex);
+
+				cachedResult = suspects;
+				logger.info("Crypto scan completed synchronously: {} suspects", suspects.size());
+				http.sendResponse(exchange, 200, http.toJson(suspects));
+			} catch (Exception e) {
+				logger.error("Sync crypto scan failed", e);
+				http.sendError(exchange, 500, "Crypto scan error: " + e.getMessage());
+			}
+			return;
+		}
+
+		// CodeIndex 未就绪 → 异步构建 + 扫描
+		String taskId = TaskManager.createHighLoadTask("CRYPTO_SCAN");
+		logger.info("CodeIndex not ready, started async crypto scan task: {}", taskId);
 
 		CompletableFuture.runAsync(() -> {
 			try {
 				JadxDecompiler decompiler = JadxUtil.getDecompiler();
 				if (decompiler == null) {
-					logger.error("Crypto scan task {} failed: Decompiler unavailable", taskId);
 					TaskManager.updateTask(taskId, "FAILED", "Decompiler unavailable");
 					return;
 				}
 
-				// 使用全局代码索引，避免重复反编译
-				Map<String, String> codeIndex = CodeIndexManager.getInstance().getIndex(decompiler);
+				Map<String, String> codeIndex = indexManager.getIndex(decompiler);
 				List<Map<String, String>> suspects = FingerprintUtil.scanCryptoFromIndex(codeIndex);
 
-				logger.info("Crypto scan task {} completed. Found {} suspects.", taskId, suspects.size());
-
-				String resultJson = http.toJson(suspects);
-				cachedResult = resultJson;
-				TaskManager.updateTask(taskId, "SUCCESS", resultJson);
+				cachedResult = suspects;
+				logger.info("Crypto scan task {} completed: {} suspects", taskId, suspects.size());
+				TaskManager.updateTask(taskId, "SUCCESS", http.toJson(suspects));
 			} catch (Exception e) {
-				logger.error("Async crypto scan task {} encountered a critical error", taskId, e);
+				logger.error("Async crypto scan failed", e);
 				TaskManager.updateTask(taskId, "FAILED", e.getMessage());
 			}
 		}, PluginServer.getAsyncPool());
 
-		String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\"}", taskId);
+		String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"CodeIndex building, scan started\"}", taskId);
 		http.sendResponse(exchange, 202, response);
 	}
 }

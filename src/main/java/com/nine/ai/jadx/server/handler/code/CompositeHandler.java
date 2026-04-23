@@ -1,5 +1,6 @@
 package com.nine.ai.jadx.server.handler.code;
 
+import com.nine.ai.jadx.util.ClassStructureBuilder;
 import com.nine.ai.jadx.util.CodeUtil;
 import com.nine.ai.jadx.util.HttpUtil;
 import com.nine.ai.jadx.util.JadxUtil;
@@ -7,7 +8,6 @@ import com.nine.ai.jadx.util.PageUtil;
 import com.sun.net.httpserver.HttpExchange;
 import jadx.api.JadxDecompiler;
 import jadx.api.JavaClass;
-import jadx.api.JavaField;
 import jadx.api.JavaMethod;
 import jadx.core.dex.nodes.MethodNode;
 import org.slf4j.Logger;
@@ -56,7 +56,7 @@ public class CompositeHandler {
 			Map<String, Object> result = new LinkedHashMap<>();
 
 			// Structure part
-			Map<String, Object> structure = buildStructure(cls);
+			Map<String, Object> structure = ClassStructureBuilder.build(cls);
 			result.put("structure", structure);
 
 			// Code part
@@ -169,8 +169,8 @@ public class CompositeHandler {
 			result.put("method_name", method.getName());
 			result.put("method_code", code);
 
-			// Callers (xrefs)
-			List<String> callers = new ArrayList<>();
+			// Callers (xrefs) — structured
+			List<Map<String, String>> callers = new ArrayList<>();
 			Collection<MethodNode> useIn = method.getMethodNode().getUseIn();
 			int count = 0;
 			boolean overflow = false;
@@ -179,7 +179,11 @@ public class CompositeHandler {
 					overflow = true;
 					break;
 				}
-				callers.add(m.getParentClass().getFullName() + " | " + getMethodSig(m));
+				Map<String, String> caller = new LinkedHashMap<>();
+				caller.put("class_name", m.getParentClass().getFullName());
+				caller.put("method_name", m.getName());
+				caller.put("method_signature", getMethodSig(m));
+				callers.add(caller);
 				count++;
 			}
 
@@ -197,51 +201,59 @@ public class CompositeHandler {
 		}
 	}
 
-	// ====================== Helpers ======================
+	/**
+	 * getMethodCode: returns only the decompiled code of a single method.
+	 * Avoids fetching the entire class source when only one method is needed.
+	 */
+	public static void handleMethodCode(HttpExchange exchange) throws IOException {
+		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
+		String className = params.get("class_name");
+		String methodName = params.get("method_name");
 
-	private static Map<String, Object> buildStructure(JavaClass cls) {
-		List<String> fields = new ArrayList<>();
-		for (JavaField field : cls.getFields()) {
-			try {
-				String typeStr = field.getFieldNode().getType().toString();
-				fields.add(typeStr + " " + field.getName());
-			} catch (Exception e) {
-				fields.add(field.getName());
-			}
+		if (className == null || className.isBlank() || methodName == null || methodName.isBlank()) {
+			http.sendError(exchange, 400, "Missing required parameters: class_name, method_name");
+			return;
 		}
 
-		List<String> methods = new ArrayList<>();
-		for (JavaMethod method : cls.getMethods()) {
-			try {
-				methods.add(method.getMethodNode().getMethodInfo().getShortId());
-			} catch (Exception e) {
-				methods.add(method.getName());
-			}
-		}
-
-		String superClass = "java.lang.Object";
-		List<String> interfaces = new ArrayList<>();
 		try {
-			if (cls.getClassNode().getSuperClass() != null) {
-				superClass = cls.getClassNode().getSuperClass().getObject();
+			JadxDecompiler decompiler = JadxUtil.getDecompiler();
+			if (decompiler == null) {
+				http.sendError(exchange, 500, "Decompiler not available");
+				return;
 			}
-			if (cls.getClassNode().getInterfaces() != null) {
-				for (var iface : cls.getClassNode().getInterfaces()) {
-					interfaces.add(iface.getObject());
-				}
+			var cache = CodeUtil.initClassCache(decompiler);
+			JavaClass cls = CodeUtil.findClassDeeply(cache, className, decompiler);
+			if (cls == null) {
+				http.sendError(exchange, 404, "Class not found: " + className);
+				return;
 			}
-		} catch (Exception e) {
-			logger.debug("Failed to get superclass/interfaces", e);
-		}
 
-		Map<String, Object> structure = new LinkedHashMap<>();
-		structure.put("class_name", cls.getFullName());
-		structure.put("super_class", superClass);
-		structure.put("implements", interfaces);
-		structure.put("fields", fields);
-		structure.put("methods", methods);
-		return structure;
+			JavaMethod method = CodeUtil.findMethod(cls, methodName);
+			if (method == null) {
+				http.sendError(exchange, 404, "Method not found: " + methodName + " in " + className);
+				return;
+			}
+
+			Map<String, Object> result = new LinkedHashMap<>();
+			String code = method.getCodeStr();
+			if (code == null || code.isEmpty()) code = "/* Method decompile failed */";
+			result.put("class_name", cls.getFullName());
+			result.put("method_name", method.getName());
+			try {
+				result.put("method_signature", method.getMethodNode().getMethodInfo().getShortId());
+			} catch (Exception e) {
+				result.put("method_signature", method.getName());
+			}
+			result.put("code", code);
+
+			http.sendResponse(exchange, 200, http.toJson(result));
+		} catch (Exception e) {
+			logger.error("getMethodCode failed", e);
+			http.sendError(exchange, 500, "Internal error: " + e.getMessage());
+		}
 	}
+
+	// ====================== Helpers ======================
 
 	private static String getMethodSig(MethodNode m) {
 		try {

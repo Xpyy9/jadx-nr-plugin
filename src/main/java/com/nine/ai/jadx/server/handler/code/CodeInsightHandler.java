@@ -57,6 +57,9 @@ public class CodeInsightHandler implements HttpHandler {
 				case "getMethodWithCallers":
 					CompositeHandler.handleMethodWithCallers(exchange);
 					break;
+				case "getMethodCode":
+					CompositeHandler.handleMethodCode(exchange);
+					break;
 				default:
 					http.sendError(exchange, 400, "Invalid action: " + action);
 			}

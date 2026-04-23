@@ -13,8 +13,8 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * SmartSearch: tries class_name search first, auto-falls back to string search if no results.
- * Reduces executor iterations by eliminating the "search class -> empty -> search string" pattern.
+ * SmartSearch: class_name 搜索优先（同步），无结果时自动回退到 string 搜索。
+ * string 回退：CodeIndex 就绪时同步返回 200，否则异步 202。
  */
 public class SmartSearchHandler {
 	private static final Logger logger = LoggerFactory.getLogger(SmartSearchHandler.class);
@@ -31,6 +31,9 @@ public class SmartSearchHandler {
 			http.sendError(exchange, 400, "Missing required parameter: query");
 			return;
 		}
+
+		int offset = HttpUtil.parseInt(params.get("offset"), 0);
+		int limit = HttpUtil.parseInt(params.get("limit"), PageUtil.DEFAULT_PAGE_SIZE);
 
 		try {
 			JadxDecompiler decompiler = JadxUtil.getDecompiler();
@@ -52,9 +55,6 @@ public class SmartSearchHandler {
 			}
 
 			if (!classMatches.isEmpty()) {
-				// Class name search has results, return immediately
-				int offset = HttpUtil.parseInt(params.get("offset"), 0);
-				int limit = HttpUtil.parseInt(params.get("limit"), PageUtil.DEFAULT_PAGE_SIZE);
 				Map<String, Object> paginated = PageUtil.paginate(
 						classMatches, offset, limit, "smart-search", "results", item -> item
 				);
@@ -64,17 +64,37 @@ public class SmartSearchHandler {
 				return;
 			}
 
-			// Phase 2: fallback to string search (async, uses code index)
-			String taskId = TaskManager.createHighLoadTask("SMART_SEARCH");
+			// Phase 2: fallback to string search
 			logger.info("SmartSearch class_name empty, falling back to string search for: {}", query);
 
-			int offset = HttpUtil.parseInt(params.get("offset"), 0);
-			int limit = HttpUtil.parseInt(params.get("limit"), PageUtil.DEFAULT_PAGE_SIZE);
+			CodeIndexManager indexManager = CodeIndexManager.getInstance();
+			if (indexManager.isIndexed()) {
+				// CodeIndex 就绪 → 同步返回
+				Map<String, String> codeIndex = indexManager.getIndex(decompiler);
+				List<String> stringMatches = new ArrayList<>();
+				for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
+					if (entry.getValue().contains(query)) {
+						stringMatches.add(entry.getKey());
+					}
+				}
+
+				Map<String, Object> paginated = PageUtil.paginate(
+						stringMatches, offset, limit, "smart-search", "results", item -> item
+				);
+				paginated.put("strategy", "string");
+				paginated.put("query", query);
+				logger.info("SmartSearch string fallback completed synchronously: {} results", stringMatches.size());
+				http.sendResponse(exchange, 200, http.toJson(paginated));
+				return;
+			}
+
+			// CodeIndex 未就绪 → 异步
+			String taskId = TaskManager.createHighLoadTask("SMART_SEARCH");
 			final String finalQuery = query;
 
 			CompletableFuture.runAsync(() -> {
 				try {
-					Map<String, String> codeIndex = CodeIndexManager.getInstance().getIndex(decompiler);
+					Map<String, String> codeIndex = indexManager.getIndex(decompiler);
 					List<String> stringMatches = new ArrayList<>();
 					for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
 						if (entry.getValue().contains(finalQuery)) {
@@ -96,7 +116,7 @@ public class SmartSearchHandler {
 			}, PluginServer.getAsyncPool());
 
 			String response = String.format(
-					"{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Class name search empty, falling back to string search\"}",
+					"{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"CodeIndex building, string search started\"}",
 					taskId
 			);
 			http.sendResponse(exchange, 202, response);

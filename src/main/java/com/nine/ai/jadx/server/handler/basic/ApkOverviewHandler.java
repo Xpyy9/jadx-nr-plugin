@@ -3,6 +3,7 @@ package com.nine.ai.jadx.server.handler.basic;
 import com.nine.ai.jadx.server.PluginServer;
 import com.nine.ai.jadx.util.HttpUtil;
 import com.nine.ai.jadx.util.JadxUtil;
+import com.nine.ai.jadx.util.ManifestParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import jadx.api.JadxDecompiler;
@@ -13,8 +14,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class ApkOverviewHandler implements HttpHandler {
 	private static final Logger logger = LoggerFactory.getLogger(ApkOverviewHandler.class);
@@ -112,15 +111,7 @@ public class ApkOverviewHandler implements HttpHandler {
 		int totalResources = resources != null ? resources.size() : 0;
 
 		// 3. Parse AndroidManifest.xml
-		String manifestXml = null;
-		if (resources != null) {
-			for (ResourceFile res : resources) {
-				if ("AndroidManifest.xml".equals(res.getOriginalName())) {
-					manifestXml = JadxUtil.getResourceContent(res);
-					break;
-				}
-			}
-		}
+		String manifestXml = ManifestParser.getManifestXml(decompiler);
 
 		String packageName = "";
 		List<String> activities = new ArrayList<>();
@@ -132,17 +123,19 @@ public class ApkOverviewHandler implements HttpHandler {
 		int targetSdk = -1;
 
 		if (manifestXml != null && !manifestXml.isBlank()) {
-			packageName = extractAttr(manifestXml, "<manifest[^>]+package\\s*=\\s*\"([^\"]+)\"");
+			packageName = ManifestParser.extractPackageName(manifestXml);
 
-			activities = extractComponents(manifestXml, "<activity", packageName);
-			services = extractComponents(manifestXml, "<service", packageName);
-			receivers = extractComponents(manifestXml, "<receiver", packageName);
-			providers = extractComponents(manifestXml, "<provider", packageName);
+			activities = ManifestParser.extractComponentNames(manifestXml, "<activity", packageName);
+			services = ManifestParser.extractComponentNames(manifestXml, "<service", packageName);
+			receivers = ManifestParser.extractComponentNames(manifestXml, "<receiver", packageName);
+			providers = ManifestParser.extractComponentNames(manifestXml, "<provider", packageName);
 
-			permissions = extractPermissions(manifestXml);
+			permissions = ManifestParser.extractUsesPermissions(manifestXml);
 
-			String minSdkStr = extractAttr(manifestXml, "android:minSdkVersion\\s*=\\s*\"([^\"]+)\"");
-			String targetSdkStr = extractAttr(manifestXml, "android:targetSdkVersion\\s*=\\s*\"([^\"]+)\"");
+			String minSdkStr = ManifestParser.extractAttr(manifestXml,
+					java.util.regex.Pattern.compile("android:minSdkVersion\\s*=\\s*\"([^\"]+)\""));
+			String targetSdkStr = ManifestParser.extractAttr(manifestXml,
+					java.util.regex.Pattern.compile("android:targetSdkVersion\\s*=\\s*\"([^\"]+)\""));
 			minSdk = HttpUtil.parseInt(minSdkStr, -1);
 			targetSdk = HttpUtil.parseInt(targetSdkStr, -1);
 		}
@@ -166,43 +159,4 @@ public class ApkOverviewHandler implements HttpHandler {
 		return http.toJson(overview);
 	}
 
-	// ====================== XML helpers (unchanged) ======================
-
-	private List<String> extractComponents(String xml, String tagPrefix, String pkg) {
-		List<String> result = new ArrayList<>();
-		Pattern namePattern = Pattern.compile("android:name\\s*=\\s*\"([^\"]+)\"");
-
-		String[] blocks = xml.split(tagPrefix);
-		for (int i = 1; i < blocks.length; i++) {
-			String block = blocks[i];
-			int closeIdx = block.indexOf('>');
-			String attrs = closeIdx > 0 ? block.substring(0, closeIdx) : block;
-			Matcher m = namePattern.matcher(attrs);
-			if (m.find()) {
-				result.add(normalize(pkg, m.group(1)));
-			}
-		}
-		return result;
-	}
-
-	private List<String> extractPermissions(String xml) {
-		List<String> perms = new ArrayList<>();
-		Pattern p = Pattern.compile("<uses-permission[^>]+android:name\\s*=\\s*\"([^\"]+)\"");
-		Matcher m = p.matcher(xml);
-		while (m.find()) {
-			perms.add(m.group(1));
-		}
-		return perms;
-	}
-
-	private String extractAttr(String xml, String regex) {
-		Matcher m = Pattern.compile(regex).matcher(xml);
-		return m.find() ? m.group(1) : "";
-	}
-
-	private String normalize(String pkg, String cls) {
-		if (cls.startsWith(".")) return pkg + cls;
-		if (!cls.contains(".")) return pkg + "." + cls;
-		return cls;
-	}
 }

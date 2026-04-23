@@ -22,8 +22,6 @@ public class JadxUtil {
 
 	// 全局缓存
 	private static Map<String, ResourceFile> resourceCache = new HashMap<>();
-	private static long lastCacheUpdate = 0;
-	private static final long CACHE_TIMEOUT = 5 * 60 * 1000; // 5分钟
 
 	/** 缓存反射获取的 decompiler 实例（实例在整个 APK 会话中不变） */
 	private static volatile JadxDecompiler cachedDecompiler = null;
@@ -80,8 +78,7 @@ public class JadxUtil {
 		if (decompiler == null) {
 			return new HashMap<>();
 		}
-		if (resourceCache.isEmpty() || System.currentTimeMillis() - lastCacheUpdate > CACHE_TIMEOUT) {
-			resourceCache.clear();
+		if (resourceCache.isEmpty()) {
 			for (ResourceFile res : decompiler.getResources()) {
 				if (res == null) continue;
 
@@ -96,7 +93,6 @@ public class JadxUtil {
 				resourceCache.put(uni, res);
 				resourceCache.put(uni.toLowerCase(), res);
 			}
-			lastCacheUpdate = System.currentTimeMillis();
 		}
 		return resourceCache;
 	}
@@ -106,7 +102,6 @@ public class JadxUtil {
 		if (resourceCache != null) {
 			resourceCache.clear();
 		}
-		lastCacheUpdate = 0;
 		CodeUtil.clearClassCache();
 		CodeIndexManager.getInstance().invalidate();
 
@@ -128,20 +123,12 @@ public class JadxUtil {
 	public static String getResourceContent(ResourceFile res) {
 		if (res == null) return null;
 		try {
-			Method loadContent = res.getClass().getMethod("loadContent");
-			Object content = loadContent.invoke(res);
+			var content = res.loadContent();
+			if (content == null) return null;
 
-			try {
-				Object text = content.getClass().getMethod("getText").invoke(content);
-				if (text != null) {
-					return (String) text.getClass().getMethod("getCodeStr").invoke(text);
-				}
-			} catch (Exception ignored) {
-			}
-
-			try {
-				return (String) content.getClass().getMethod("getCodeStr").invoke(content);
-			} catch (Exception ignored) {
+			var text = content.getText();
+			if (text != null) {
+				return text.getCodeStr();
 			}
 
 			return content.toString();

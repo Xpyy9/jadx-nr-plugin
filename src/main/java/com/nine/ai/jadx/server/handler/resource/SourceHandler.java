@@ -10,6 +10,7 @@ import jadx.api.JadxDecompiler;
 import jadx.api.ResourceFile;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class SourceHandler implements HttpHandler {
@@ -60,16 +61,13 @@ public class SourceHandler implements HttpHandler {
 			start = Math.max(1, start);
 			String resultContent = CodeUtil.extractLineRange(content, start, end);
 
-			String json = """
-                {
-                  "type": "resource/text",
-                  "file": {
-                    "file_name": "%s",
-                    "content": "%s"
-                  }
-                }
-                """.formatted(HttpUtil.escapeJson(fileName), HttpUtil.escapeJson(resultContent));
-			http.sendResponse(exchange, 200, json);
+			Map<String, Object> result = new LinkedHashMap<>();
+			result.put("type", "resource/text");
+			Map<String, String> file = new LinkedHashMap<>();
+			file.put("file_name", fileName);
+			file.put("content", resultContent);
+			result.put("file", file);
+			http.sendResponse(exchange, 200, http.toJson(result));
 
 		} catch (Exception e) {
 			http.sendError(exchange, 500, "Error loading resource: " + e.getMessage());

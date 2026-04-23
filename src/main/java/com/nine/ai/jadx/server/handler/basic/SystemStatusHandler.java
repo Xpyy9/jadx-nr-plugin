@@ -1,6 +1,7 @@
 package com.nine.ai.jadx.server.handler.basic;
 
 import com.nine.ai.jadx.server.PluginServer;
+import com.nine.ai.jadx.util.CodeIndexManager;
 import com.nine.ai.jadx.util.HttpUtil;
 import com.nine.ai.jadx.util.JadxUtil;
 import com.sun.net.httpserver.HttpExchange;
@@ -36,6 +37,11 @@ public class SystemStatusHandler implements HttpHandler {
 			Map<String, Object> health = new LinkedHashMap<>();
 			health.put("status", isRunning ? "UP" : "DOWN");
 			health.put("decompiler_ready", decompilerReady);
+			health.put("code_index_ready", CodeIndexManager.getInstance().isIndexed());
+			int indexProgress = CodeIndexManager.getInstance().getProgress();
+			if (indexProgress >= 0 && indexProgress < 100) {
+				health.put("code_index_progress", indexProgress);
+			}
 			health.put("uptime_ms", System.currentTimeMillis() - PluginServer.getInstance().getStartTime());
 
 			Map<String, Object> memory = new LinkedHashMap<>();
@@ -43,6 +49,16 @@ public class SystemStatusHandler implements HttpHandler {
 			memory.put("used_mb", usedMem);
 			memory.put("free_mb", freeMem);
 			memory.put("usage_percent", String.format("%.2f%%", usagePercent));
+
+			String pressure;
+			if (usagePercent > 85) {
+				pressure = "critical";
+			} else if (usagePercent > 70) {
+				pressure = "elevated";
+			} else {
+				pressure = "normal";
+			}
+			memory.put("memory_pressure", pressure);
 
 			Map<String, Object> result = new LinkedHashMap<>();
 			result.put("health", health);

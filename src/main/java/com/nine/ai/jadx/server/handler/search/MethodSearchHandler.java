@@ -1,9 +1,8 @@
 package com.nine.ai.jadx.server.handler.search;
 
-import com.nine.ai.jadx.server.PluginServer;
 import com.nine.ai.jadx.util.HttpUtil;
 import com.nine.ai.jadx.util.JadxUtil;
-import com.nine.ai.jadx.util.TaskManager;
+import com.nine.ai.jadx.util.PageUtil;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import jadx.api.JadxDecompiler;
@@ -14,18 +13,20 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 
+/**
+ * 方法搜索 — 全同步。
+ * 方法元数据已在类加载时就位，不触发反编译，无需异步。
+ */
 public class MethodSearchHandler implements HttpHandler {
 	private static final Logger logger = LoggerFactory.getLogger(MethodSearchHandler.class);
 	private final HttpUtil http = HttpUtil.getInstance();
 
 	private static final int MAX_CACHE_ENTRIES = 100;
-	/** LRU cache for method search: methodName -> list of "class | signature" strings */
-	private static final Map<String, List<String>> METHOD_CACHE =
+	private static final Map<String, List<Map<String, String>>> METHOD_CACHE =
 			Collections.synchronizedMap(new LinkedHashMap<>(MAX_CACHE_ENTRIES, 0.75f, true) {
 				@Override
-				protected boolean removeEldestEntry(Map.Entry<String, List<String>> eldest) {
+				protected boolean removeEldestEntry(Map.Entry<String, List<Map<String, String>>> eldest) {
 					return size() > MAX_CACHE_ENTRIES;
 				}
 			});
@@ -49,71 +50,72 @@ public class MethodSearchHandler implements HttpHandler {
 			return;
 		}
 
-		// Check cache
-		List<String> cached = METHOD_CACHE.get(methodName.toLowerCase());
-		if (cached != null) {
-			logger.info("Method search cache hit for: {}", methodName);
-			String taskId = TaskManager.createHighLoadTask("METHOD_SEARCH");
-			int offset = HttpUtil.parseInt(params.get("offset"), 0);
-			int limit = HttpUtil.parseInt(params.get("limit"), com.nine.ai.jadx.util.PageUtil.DEFAULT_PAGE_SIZE);
-
-			Map<String, Object> result = com.nine.ai.jadx.util.PageUtil.paginate(
-					cached, offset, limit, "method-search-results", "methods", item -> item
-			);
-			TaskManager.updateTask(taskId, "SUCCESS", http.toJson(result));
-
-			String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Result from cache\"}", taskId);
-			http.sendResponse(exchange, 202, response);
-			return;
-		}
-
-		// Cache miss — async search
-		String taskId = TaskManager.createHighLoadTask("METHOD_SEARCH");
-		logger.info("Started background method search task: {} for: {}", taskId, methodName);
-
 		int offset = HttpUtil.parseInt(params.get("offset"), 0);
-		int limit = HttpUtil.parseInt(params.get("limit"), com.nine.ai.jadx.util.PageUtil.DEFAULT_PAGE_SIZE);
+		int limit = HttpUtil.parseInt(params.get("limit"), PageUtil.DEFAULT_PAGE_SIZE);
 
-		CompletableFuture.runAsync(() -> {
-			try {
+		try {
+			String cacheKey = methodName.toLowerCase();
+			List<Map<String, String>> results = METHOD_CACHE.get(cacheKey);
+
+			if (results == null) {
 				JadxDecompiler decompiler = JadxUtil.getDecompiler();
 				if (decompiler == null) {
-					TaskManager.updateTask(taskId, "FAILED", "Decompiler not available");
+					http.sendError(exchange, 500, "Decompiler not available");
 					return;
 				}
 
-				List<String> resultSignatures = new ArrayList<>();
+				results = new ArrayList<>();
 				String lowerMethod = methodName.toLowerCase();
 
 				for (JavaClass cls : decompiler.getClassesWithInners()) {
 					try {
 						for (JavaMethod mth : cls.getMethods()) {
 							if (mth.getName().toLowerCase().contains(lowerMethod)) {
-								String signature = mth.getName();
+								Map<String, String> entry = new LinkedHashMap<>();
+								entry.put("class_name", cls.getFullName());
+								entry.put("method_name", mth.getName());
 								try {
-									signature = mth.getMethodNode().getMethodInfo().getShortId();
+									entry.put("method_signature", mth.getMethodNode().getMethodInfo().getShortId());
+								} catch (Exception e) {
+									entry.put("method_signature", mth.getName());
+								}
+								try {
+									int flags = mth.getMethodNode().getAccessFlags().rawValue();
+									entry.put("access_flags", decodeAccessFlags(flags));
 								} catch (Exception ignored) {}
-								resultSignatures.add(cls.getFullName() + " | " + signature);
+								results.add(entry);
 							}
 						}
-					} catch (Exception ignored) {
-					}
+					} catch (Exception ignored) {}
 				}
 
-				METHOD_CACHE.put(methodName.toLowerCase(), resultSignatures);
-
-				Map<String, Object> result = com.nine.ai.jadx.util.PageUtil.paginate(
-						resultSignatures, offset, limit, "method-search-results", "methods", item -> item
-				);
-
-				TaskManager.updateTask(taskId, "SUCCESS", http.toJson(result));
-			} catch (Exception e) {
-				logger.error("Async method search failed", e);
-				TaskManager.updateTask(taskId, "FAILED", e.getMessage());
+				METHOD_CACHE.put(cacheKey, results);
+				logger.info("Method search completed synchronously for '{}': {} results", methodName, results.size());
+			} else {
+				logger.info("Method search cache hit for: {}", methodName);
 			}
-		}, PluginServer.getAsyncPool());
 
-		String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Method search started\"}", taskId);
-		http.sendResponse(exchange, 202, response);
+			Map<String, Object> response = PageUtil.paginate(
+					results, offset, limit, "method-search-results", "methods", item -> item
+			);
+			http.sendResponse(exchange, 200, http.toJson(response));
+
+		} catch (Exception e) {
+			logger.error("Method search failed", e);
+			http.sendError(exchange, 500, "Method search error: " + e.getMessage());
+		}
+	}
+
+	static String decodeAccessFlags(int flags) {
+		List<String> parts = new ArrayList<>();
+		if ((flags & 0x0001) != 0) parts.add("public");
+		if ((flags & 0x0002) != 0) parts.add("private");
+		if ((flags & 0x0004) != 0) parts.add("protected");
+		if ((flags & 0x0008) != 0) parts.add("static");
+		if ((flags & 0x0010) != 0) parts.add("final");
+		if ((flags & 0x0020) != 0) parts.add("synchronized");
+		if ((flags & 0x0100) != 0) parts.add("native");
+		if ((flags & 0x0400) != 0) parts.add("abstract");
+		return parts.isEmpty() ? "package-private" : String.join(" ", parts);
 	}
 }

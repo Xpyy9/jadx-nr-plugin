@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -23,6 +24,8 @@ public class CodeIndexManager {
 	private final ReadWriteLock lock = new ReentrantReadWriteLock();
 	private Map<String, String> codeIndex = null; // fullClassName → decompiled code
 	private boolean indexed = false;
+	private final AtomicInteger indexedCount = new AtomicInteger(0);
+	private int totalClasses = 0;
 
 	private CodeIndexManager() {}
 
@@ -53,7 +56,11 @@ public class CodeIndexManager {
 			long start = System.currentTimeMillis();
 			codeIndex = new HashMap<>();
 
-			for (JavaClass cls : decompiler.getClassesWithInners()) {
+			var classList = decompiler.getClassesWithInners();
+			totalClasses = classList.size();
+			indexedCount.set(0);
+
+			for (JavaClass cls : classList) {
 				try {
 					String code = cls.getCode();
 					if (code != null && !code.isEmpty()) {
@@ -61,6 +68,7 @@ public class CodeIndexManager {
 					}
 				} catch (Exception ignored) {
 				}
+				indexedCount.incrementAndGet();
 			}
 
 			indexed = true;
@@ -85,6 +93,15 @@ public class CodeIndexManager {
 	}
 
 	/**
+	 * 获取索引构建进度（百分比 0-100）。-1 表示未开始。
+	 */
+	public int getProgress() {
+		if (indexed) return 100;
+		if (totalClasses == 0) return -1;
+		return (int) ((indexedCount.get() * 100L) / totalClasses);
+	}
+
+	/**
 	 * 清除索引。clearCache 时调用，下次搜索将重新构建。
 	 */
 	public void invalidate() {
@@ -98,6 +115,23 @@ public class CodeIndexManager {
 			LOG.info("Code index invalidated");
 		} finally {
 			lock.writeLock().unlock();
+		}
+	}
+
+	/**
+	 * 内存压力检查：当 JVM 堆使用 > 85% 时自动回收 code index 并 GC。
+	 * 在搜索操作完成后调用。
+	 */
+	public void trimIfNeeded() {
+		Runtime rt = Runtime.getRuntime();
+		long maxMem = rt.maxMemory();
+		long usedMem = rt.totalMemory() - rt.freeMemory();
+		double usage = (usedMem * 100.0) / maxMem;
+
+		if (usage > 85 && indexed) {
+			LOG.warn("Memory pressure critical ({}%), invalidating code index to free memory", String.format("%.1f", usage));
+			invalidate();
+			System.gc();
 		}
 	}
 }

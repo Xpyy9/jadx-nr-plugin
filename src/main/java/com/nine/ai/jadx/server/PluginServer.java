@@ -14,6 +14,9 @@ import jadx.gui.ui.MainWindow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.nine.ai.jadx.util.CodeIndexManager;
+import com.nine.ai.jadx.util.JadxUtil;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.concurrent.ExecutorService;
@@ -104,7 +107,7 @@ public class PluginServer {
 			this.startTime = System.currentTimeMillis();
 			LOG.info("JADX Agent Server started on port {}", PORT);
 
-			// Pre-build the APK overview cache in a background thread
+			// Pre-build APK overview + code index in background
 			// so the server is responsive immediately while data loads
 			Thread preloadThread = new Thread(() -> {
 				try {
@@ -112,7 +115,18 @@ public class PluginServer {
 				} catch (Exception e) {
 					LOG.warn("APK overview preload failed, will rebuild on first request", e);
 				}
-			}, "jadx-apk-overview-preload");
+				// Pre-build code index after APK overview is ready
+				try {
+					var decompiler = JadxUtil.getDecompiler();
+					if (decompiler != null) {
+						LOG.info("Starting code index pre-build...");
+						CodeIndexManager.getInstance().getIndex(decompiler);
+						LOG.info("Code index pre-build completed");
+					}
+				} catch (Exception e) {
+					LOG.warn("Code index pre-build failed, will build on first search", e);
+				}
+			}, "jadx-preload");
 			preloadThread.setDaemon(true);
 			preloadThread.start();
 

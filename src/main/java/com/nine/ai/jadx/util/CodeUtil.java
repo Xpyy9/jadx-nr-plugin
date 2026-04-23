@@ -33,7 +33,6 @@ public class CodeUtil {
 		for (JavaClass cls : decompiler.getClassesWithInners()) {
 			if (cls == null || cls.getFullName() == null) continue;
 			classCache.put(cls.getFullName(), cls);
-			classCache.put(cls.getRawName(), cls);
 
 			// 构建短名索引
 			String fullName = cls.getFullName();

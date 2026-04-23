@@ -4,11 +4,11 @@ import com.nine.ai.jadx.server.PluginServer;
 import com.nine.ai.jadx.util.CodeUtil;
 import com.nine.ai.jadx.util.HttpUtil;
 import com.nine.ai.jadx.util.JadxUtil;
+import com.nine.ai.jadx.util.ManifestParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import jadx.api.JadxDecompiler;
 import jadx.api.JavaClass;
-import jadx.api.ResourceFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,24 +38,15 @@ public class MainActivityHandler implements HttpHandler {
 		}
 
 		try {
-			// 1. 获取 AndroidManifest.xml 资源
-			ResourceFile manifestRes = decompiler.getResources().stream()
-					.filter(res -> "AndroidManifest.xml".equals(res.getOriginalName()))
-					.findFirst().orElse(null);
-
-			if (manifestRes == null) {
-				http.sendError(exchange, 404, "AndroidManifest.xml not found");
-				return;
-			}
-
-			String xml = JadxUtil.getResourceContent(manifestRes);
+			// 1. 获取 AndroidManifest.xml
+			String xml = ManifestParser.getManifestXml(decompiler);
 			if (xml == null || xml.isBlank()) {
-				http.sendError(exchange, 500, "Failed to parse AndroidManifest.xml content");
+				http.sendError(exchange, 404, "AndroidManifest.xml not found or empty");
 				return;
 			}
 
-			// 2. 模仿参考代码的解析逻辑：提取包名并识别所有 Launcher 活动
-			String pkg = extractPackage(xml);
+			// 2. 提取包名并识别所有 Launcher 活动
+			String pkg = ManifestParser.extractPackageName(xml);
 			List<String> candidates = findLauncherActivities(xml, pkg);
 
 			if (candidates.isEmpty()) {
@@ -115,21 +106,11 @@ public class MainActivityHandler implements HttpHandler {
 				Pattern p = Pattern.compile("android:name\\s*=\\s*\"([^\"]+)\"");
 				Matcher m = p.matcher(block);
 				if (m.find()) {
-					activities.add(normalize(pkg, m.group(1)));
+					activities.add(ManifestParser.normalize(pkg, m.group(1)));
 				}
 			}
 		}
 		return activities;
 	}
 
-	private String extractPackage(String xml) {
-		Matcher m = Pattern.compile("package\\s*=\\s*\"([^\"]+)\"").matcher(xml);
-		return m.find() ? m.group(1) : "";
-	}
-
-	private String normalize(String pkg, String cls) {
-		if (cls.startsWith(".")) return pkg + cls;
-		if (!cls.contains(".")) return pkg + "." + cls;
-		return cls;
-	}
 }

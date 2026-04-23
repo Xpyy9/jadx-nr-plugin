@@ -1,13 +1,12 @@
 package com.nine.ai.jadx.server.handler.code;
 
+import com.nine.ai.jadx.util.ClassStructureBuilder;
 import com.nine.ai.jadx.util.CodeUtil;
 import com.nine.ai.jadx.util.HttpUtil;
 import com.nine.ai.jadx.util.JadxUtil;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import jadx.api.JavaClass;
-import jadx.api.JavaField;
-import jadx.api.JavaMethod;
 import jadx.api.JadxDecompiler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,47 +43,7 @@ public class ClassStructureHandler implements HttpHandler {
 				return;
 			}
 
-			List<String> fields = new ArrayList<>();
-			for (JavaField field : targetClass.getFields()) {
-				try {
-					String typeStr = field.getFieldNode().getType().toString();
-					fields.add(typeStr + " " + field.getName());
-				} catch (Exception e) {
-					fields.add(field.getName());
-				}
-			}
-
-			List<String> methods = new ArrayList<>();
-			for (JavaMethod method : targetClass.getMethods()) {
-				try {
-					methods.add(method.getMethodNode().getMethodInfo().getShortId());
-				} catch (Exception e) {
-					methods.add(method.getName());
-				}
-			}
-
-			String superClass = "java.lang.Object";
-			List<String> interfaces = new ArrayList<>();
-			try {
-				if (targetClass.getClassNode().getSuperClass() != null) {
-					superClass = targetClass.getClassNode().getSuperClass().getObject();
-				}
-				if (targetClass.getClassNode().getInterfaces() != null) {
-					for (jadx.core.dex.instructions.args.ArgType iface : targetClass.getClassNode().getInterfaces()) {
-						interfaces.add(iface.getObject());
-					}
-				}
-			} catch (Exception e) {
-				logger.debug("Failed to get superclass/interfaces, using defaults.", e);
-			}
-
-			Map<String, Object> result = new LinkedHashMap<>();
-			result.put("class_name", targetClass.getFullName());
-			result.put("super_class", superClass);
-			result.put("implements", interfaces);
-			result.put("fields", fields);
-			result.put("methods", methods);
-
+			Map<String, Object> result = ClassStructureBuilder.build(targetClass);
 			httpUtil.sendResponse(exchange, 200, httpUtil.toJson(result));
 
 		} catch (Exception e) {

@@ -104,6 +104,12 @@ public class ManifestDetailHandler implements HttpHandler {
         // Queries
         result.put("queries", extractQueries(xml));
 
+        // Security findings from manifest analysis
+        result.put("security_findings", analyzeManifestSecurity(xml, components, result));
+
+        // Deep links aggregation
+        result.put("deep_links", extractDeepLinks(components));
+
         return result;
     }
 
@@ -349,6 +355,126 @@ public class ManifestDetailHandler implements HttpHandler {
         queries.addAll(intentActions);
 
         return queries;
+    }
+
+    // ==================== Security Analysis ====================
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, String>> analyzeManifestSecurity(String xml, Map<String, Object> components, Map<String, Object> result) {
+        List<Map<String, String>> findings = new ArrayList<>();
+
+        // Check debuggable
+        Map<String, Object> app = (Map<String, Object>) result.get("application");
+        if (app != null && Boolean.TRUE.equals(app.get("debuggable"))) {
+            findings.add(makeSecurityFinding("critical", "debuggable",
+                    "Application is debuggable (android:debuggable=true)"));
+        }
+
+        // Check allowBackup without custom BackupAgent
+        if (app != null && Boolean.TRUE.equals(app.get("allowBackup"))) {
+            String appName = app.get("name") != null ? app.get("name").toString() : "";
+            if (!xml.contains("android:backupAgent")) {
+                findings.add(makeSecurityFinding("medium", "allowBackup",
+                        "Application allows backup without custom BackupAgent"));
+            }
+        }
+
+        // Check exported components without permission
+        for (String type : new String[]{"activities", "services", "receivers"}) {
+            List<Map<String, Object>> comps = (List<Map<String, Object>>) components.get(type);
+            if (comps == null) continue;
+            for (Map<String, Object> comp : comps) {
+                if (Boolean.TRUE.equals(comp.get("exported"))) {
+                    String name = comp.get("name") != null ? comp.get("name").toString() : "";
+                    // Check if component block in XML has a permission attribute
+                    if (!hasPermissionProtection(xml, name)) {
+                        findings.add(makeSecurityFinding("medium", "exported_no_permission",
+                                "Exported " + type.substring(0, type.length()-1) + " without permission: " + name));
+                    }
+                }
+            }
+        }
+
+        // Check exported ContentProviders without read/write permission
+        List<Map<String, Object>> providers = (List<Map<String, Object>>) components.get("providers");
+        if (providers != null) {
+            for (Map<String, Object> p : providers) {
+                if (Boolean.TRUE.equals(p.get("exported"))) {
+                    boolean hasPerm = p.containsKey("permission") || p.containsKey("readPermission") || p.containsKey("writePermission");
+                    if (!hasPerm) {
+                        String name = p.get("name") != null ? p.get("name").toString() : "";
+                        findings.add(makeSecurityFinding("high", "exported_provider_no_permission",
+                                "Exported ContentProvider without read/write permission: " + name));
+                    }
+                }
+            }
+        }
+
+        // Check cleartext traffic
+        if (app != null && Boolean.TRUE.equals(app.get("usesCleartextTraffic"))) {
+            findings.add(makeSecurityFinding("medium", "cleartext_traffic",
+                    "Application allows cleartext HTTP traffic"));
+        }
+
+        return findings;
+    }
+
+    private boolean hasPermissionProtection(String xml, String componentName) {
+        // Simple heuristic: find the component block and check for android:permission
+        String simpleName = componentName.contains(".") ? componentName.substring(componentName.lastIndexOf('.')) : componentName;
+        int idx = xml.indexOf(simpleName);
+        if (idx < 0) return false;
+        // Look at the block around this component (up to 500 chars after)
+        String block = xml.substring(idx, Math.min(xml.length(), idx + 500));
+        int closeTag = block.indexOf(">");
+        if (closeTag > 0) block = block.substring(0, closeTag);
+        return block.contains("android:permission");
+    }
+
+    private Map<String, String> makeSecurityFinding(String severity, String type, String description) {
+        Map<String, String> finding = new LinkedHashMap<>();
+        finding.put("severity", severity);
+        finding.put("type", type);
+        finding.put("description", description);
+        return finding;
+    }
+
+    // ==================== Deep Links ====================
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, String>> extractDeepLinks(Map<String, Object> components) {
+        List<Map<String, String>> deepLinks = new ArrayList<>();
+
+        List<Map<String, Object>> activities = (List<Map<String, Object>>) components.get("activities");
+        if (activities == null) return deepLinks;
+
+        for (Map<String, Object> activity : activities) {
+            List<Map<String, Object>> filters = (List<Map<String, Object>>) activity.get("intent_filters");
+            if (filters == null) continue;
+
+            String compName = activity.get("name") != null ? activity.get("name").toString() : "";
+            boolean exported = Boolean.TRUE.equals(activity.get("exported"));
+
+            for (Map<String, Object> filter : filters) {
+                List<Map<String, String>> dataEntries = (List<Map<String, String>>) filter.get("data");
+                if (dataEntries == null) continue;
+
+                for (Map<String, String> data : dataEntries) {
+                    if (data.containsKey("scheme")) {
+                        Map<String, String> link = new LinkedHashMap<>();
+                        link.put("component", compName);
+                        link.put("scheme", data.getOrDefault("scheme", ""));
+                        if (data.containsKey("host")) link.put("host", data.get("host"));
+                        if (data.containsKey("path")) link.put("path", data.get("path"));
+                        if (data.containsKey("pathPrefix")) link.put("path_prefix", data.get("pathPrefix"));
+                        if (data.containsKey("pathPattern")) link.put("path_pattern", data.get("pathPattern"));
+                        link.put("exported", String.valueOf(exported));
+                        deepLinks.add(link);
+                    }
+                }
+            }
+        }
+        return deepLinks;
     }
 
     // ==================== Helpers ====================

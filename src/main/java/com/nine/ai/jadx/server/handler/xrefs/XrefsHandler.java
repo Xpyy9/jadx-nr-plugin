@@ -53,12 +53,14 @@ public class XrefsHandler implements HttpHandler {
 				return;
 			}
 
-			List<String> results = new ArrayList<>();
+			List<Map<String, String>> results = new ArrayList<>();
 			String xrefType = "class-xrefs";
+			String target = cls.getFullName();
 			boolean isOverflow = false;
 
 			if (fieldName != null && !fieldName.isBlank()) {
 				xrefType = "field-xrefs";
+				target = cls.getFullName() + "." + fieldName;
 				JavaField targetField = CodeUtil.findField(cls, fieldName);
 
 				if (targetField == null) {
@@ -71,6 +73,7 @@ public class XrefsHandler implements HttpHandler {
 				isOverflow = collectFromNodes(targetField.getFieldNode().getUseIn(), results);
 			} else if (methodName != null && !methodName.isBlank()) {
 				xrefType = "method-xrefs";
+				target = cls.getFullName() + "." + methodName;
 				JavaMethod targetMethod = CodeUtil.findMethod(cls, methodName);
 
 				if (targetMethod == null) {
@@ -92,6 +95,7 @@ public class XrefsHandler implements HttpHandler {
 			Map<String, Object> pageResult = PageUtil.paginate(
 					results, offset, limit, xrefType, "references", item -> item
 			);
+			pageResult.put("target", target);
 
 			if (isOverflow) {
 				@SuppressWarnings("unchecked")
@@ -107,26 +111,38 @@ public class XrefsHandler implements HttpHandler {
 		}
 	}
 
-	private boolean collectFromNodes(Collection<MethodNode> nodes, List<String> results) {
+	private boolean collectFromNodes(Collection<MethodNode> nodes, List<Map<String, String>> results) {
 		int count = 0;
 		for (MethodNode m : nodes) {
 			if (count >= XREF_HARD_LIMIT) return true;
-			results.add(m.getParentClass().getFullName() + " | " + getMethodSignature(m));
+			Map<String, String> entry = new LinkedHashMap<>();
+			entry.put("class_name", m.getParentClass().getFullName());
+			entry.put("method_name", m.getName());
+			entry.put("method_signature", getMethodSignature(m));
+			results.add(entry);
 			count++;
 		}
 		return false;
 	}
 
-	private boolean collectClassXrefs(ClassNode node, List<String> results) {
+	private boolean collectClassXrefs(ClassNode node, List<Map<String, String>> results) {
 		int count = 0;
 		for (ClassNode c : node.getUseIn()) {
 			if (count >= XREF_HARD_LIMIT) return true;
-			results.add(c.getFullName());
+			Map<String, String> entry = new LinkedHashMap<>();
+			entry.put("class_name", c.getFullName());
+			entry.put("ref_type", "class");
+			results.add(entry);
 			count++;
 		}
 		for (MethodNode m : node.getUseInMth()) {
 			if (count >= XREF_HARD_LIMIT) return true;
-			results.add(m.getParentClass().getFullName() + " | " + getMethodSignature(m));
+			Map<String, String> entry = new LinkedHashMap<>();
+			entry.put("class_name", m.getParentClass().getFullName());
+			entry.put("method_name", m.getName());
+			entry.put("method_signature", getMethodSignature(m));
+			entry.put("ref_type", "method");
+			results.add(entry);
 			count++;
 		}
 		return false;

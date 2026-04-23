@@ -11,6 +11,9 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * 字符串搜索 — CodeIndex 就绪时同步返回 200，否则走异步 202。
+ */
 public class StringSearchHandler implements HttpHandler {
 	private static final Logger logger = LoggerFactory.getLogger(StringSearchHandler.class);
 	private final HttpUtil http = HttpUtil.getInstance();
@@ -38,19 +41,55 @@ public class StringSearchHandler implements HttpHandler {
 			return;
 		}
 
+		int offset = HttpUtil.parseInt(params.get("offset"), 0);
+		int limit = HttpUtil.parseInt(params.get("limit"), PageUtil.DEFAULT_PAGE_SIZE);
+
+		// 缓存命中 → 同步返回
 		List<String> cached = SEARCH_CACHE.get(query);
 		if (cached != null) {
 			logger.info("String search cache hit for: {}", query);
-			String taskId = TaskManager.createHighLoadTask("STRING_SEARCH");
-			TaskManager.updateTask(taskId, "SUCCESS", http.toJson(cached));
-
-			String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Result from cache\"}", taskId);
-			http.sendResponse(exchange, 202, response);
+			Map<String, Object> response = PageUtil.paginate(
+					cached, offset, limit, "string-search-results", "classes", item -> item
+			);
+			http.sendResponse(exchange, 200, http.toJson(response));
 			return;
 		}
 
+		// CodeIndex 已就绪 → 同步搜索
+		CodeIndexManager indexManager = CodeIndexManager.getInstance();
+		if (indexManager.isIndexed()) {
+			try {
+				JadxDecompiler decompiler = JadxUtil.getDecompiler();
+				if (decompiler == null) {
+					http.sendError(exchange, 500, "Decompiler not available");
+					return;
+				}
+
+				Map<String, String> codeIndex = indexManager.getIndex(decompiler);
+				List<String> results = new ArrayList<>();
+				for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
+					if (entry.getValue().contains(query)) {
+						results.add(entry.getKey());
+					}
+				}
+
+				SEARCH_CACHE.put(query, results);
+				logger.info("String search completed synchronously for '{}': {} results", query, results.size());
+
+				Map<String, Object> response = PageUtil.paginate(
+						results, offset, limit, "string-search-results", "classes", item -> item
+				);
+				http.sendResponse(exchange, 200, http.toJson(response));
+			} catch (Exception e) {
+				logger.error("Sync string search failed", e);
+				http.sendError(exchange, 500, "String search error: " + e.getMessage());
+			}
+			return;
+		}
+
+		// CodeIndex 未就绪 → 异步构建 + 搜索，返回 202
 		String taskId = TaskManager.createHighLoadTask("STRING_SEARCH");
-		logger.info("Started background string search task: {}", taskId);
+		logger.info("CodeIndex not ready, started async string search task: {}", taskId);
 
 		CompletableFuture.runAsync(() -> {
 			try {
@@ -60,9 +99,7 @@ public class StringSearchHandler implements HttpHandler {
 					return;
 				}
 
-				// 使用全局代码索引，避免重复反编译
-				Map<String, String> codeIndex = CodeIndexManager.getInstance().getIndex(decompiler);
-
+				Map<String, String> codeIndex = indexManager.getIndex(decompiler);
 				List<String> results = new ArrayList<>();
 				for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
 					if (entry.getValue().contains(query)) {
@@ -73,12 +110,12 @@ public class StringSearchHandler implements HttpHandler {
 				SEARCH_CACHE.put(query, results);
 				TaskManager.updateTask(taskId, "SUCCESS", http.toJson(results));
 			} catch (Exception e) {
-				logger.error("Async search failed", e);
+				logger.error("Async string search failed", e);
 				TaskManager.updateTask(taskId, "FAILED", e.getMessage());
 			}
 		}, PluginServer.getAsyncPool());
 
-		String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Search started\"}", taskId);
+		String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"CodeIndex building, search started\"}", taskId);
 		http.sendResponse(exchange, 202, response);
 	}
 }

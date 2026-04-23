@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class TaskStatusHandler implements HttpHandler {
@@ -36,21 +37,20 @@ public class TaskStatusHandler implements HttpHandler {
 				return;
 			}
 
-			StringBuilder json = new StringBuilder();
-			json.append("{");
-			json.append("\"task_id\":\"").append(taskId).append("\",");
-			json.append("\"type\":\"").append(task.type).append("\",");
-			json.append("\"status\":\"").append(task.status).append("\",");
-			json.append("\"timestamp\":").append(task.timestamp);
+			Map<String, Object> json = new LinkedHashMap<>();
+			json.put("task_id", taskId);
+			json.put("type", task.type);
+			json.put("status", task.status);
+			json.put("timestamp", task.timestamp);
 
 			if ("SUCCESS".equals(task.status) && task.result != null) {
-				json.append(",\"result\":").append(task.result);
+				// result is already a JSON string, wrap it as raw
+				json.put("result", new com.google.gson.JsonParser().parse(task.result.toString()));
 			} else if ("FAILED".equals(task.status)) {
-				json.append(",\"error\":\"").append(task.result != null ? HttpUtil.escapeJson(task.result.toString()) : "Unknown error").append("\"");
+				json.put("error", task.result != null ? task.result.toString() : "Unknown error");
 			}
-			json.append("}");
 
-			http.sendResponse(exchange, 200, json.toString());
+			http.sendResponse(exchange, 200, http.toJson(json));
 
 		} catch (Exception e) {
 			logger.error("Error checking task status", e);
