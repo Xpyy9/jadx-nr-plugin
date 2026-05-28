@@ -36,11 +36,12 @@ public class PageUtil {
 
 		boolean hasMore = end < total;
 
-		Map<String, Object> result = new HashMap<>();
+		// 优化：使用 LinkedHashMap 保持 JSON 字段顺序，提升 API 一致性
+		Map<String, Object> result = new LinkedHashMap<>();
 		result.put("type", dataType);
 		result.put(itemsKey, pageItems);
 
-		Map<String, Object> pagination = new HashMap<>();
+		Map<String, Object> pagination = new LinkedHashMap<>();
 		pagination.put("total", total);
 		pagination.put("offset", offset);
 		pagination.put("limit", limit);

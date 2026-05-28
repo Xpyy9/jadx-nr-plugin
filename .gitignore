@@ -15,22 +15,25 @@ out/
 
 **/.DS_Store
 
+# Build and environment
 bin/
 target/
 build/
 classes/
-idea/
 .gradle/
+local.properties
 
-*.sh
-
+# Temp files
 *-tmp/
 **/tmp/
 
+# Compiled files
 *.class
 *.dump
 *.log
 *.cfg
 *.orig
 *.jar
-*.md
+
+# Docs (keep README/LICENSE tracked)
+API_REFERENCE.md

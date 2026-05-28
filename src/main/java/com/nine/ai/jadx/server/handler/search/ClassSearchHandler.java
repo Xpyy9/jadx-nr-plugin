@@ -1,6 +1,5 @@
 package com.nine.ai.jadx.server.handler.search;
 
-import com.nine.ai.jadx.server.PluginServer;
 import com.nine.ai.jadx.util.*;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -11,14 +10,12 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 
 public class ClassSearchHandler implements HttpHandler {
 	private static final Logger logger = LoggerFactory.getLogger(ClassSearchHandler.class);
 	private final HttpUtil http = HttpUtil.getInstance();
 
 	private static final int MAX_CACHE_ENTRIES = 100;
-	/** LRU cache for code-search results: "term|package" -> list of matching class names */
 	private static final Map<String, List<String>> CODE_SEARCH_CACHE =
 			Collections.synchronizedMap(new LinkedHashMap<>(MAX_CACHE_ENTRIES, 0.75f, true) {
 				@Override
@@ -65,8 +62,6 @@ public class ClassSearchHandler implements HttpHandler {
 		}
 	}
 
-	// ====================== Sync path: class_name only ======================
-
 	private void handleClassNameSearchSync(
 			HttpExchange exchange, String searchTerm, String packageFilter,
 			Map<String, String> params
@@ -103,15 +98,12 @@ public class ClassSearchHandler implements HttpHandler {
 		http.sendResponse(exchange, 200, http.toJson(result));
 	}
 
-	// ====================== Async path: search_in contains code ======================
-
 	private void handleCodeSearchAsync(
 			HttpExchange exchange, String searchTerm, String packageFilter,
 			Set<SearchLocation> locations, Map<String, String> params
 	) throws IOException {
 		String cacheKey = buildCacheKey(searchTerm, packageFilter);
 
-		// Check cache first
 		List<String> cached = CODE_SEARCH_CACHE.get(cacheKey);
 		if (cached != null) {
 			logger.info("Code search cache hit for: {}", searchTerm);
@@ -124,76 +116,55 @@ public class ClassSearchHandler implements HttpHandler {
 			String taskId = TaskManager.createHighLoadTask("CLASS_CODE_SEARCH");
 			TaskManager.updateTask(taskId, "SUCCESS", http.toJson(paginated));
 
-			String response = String.format(
-					"{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Result from cache\"}",
-					taskId
-			);
+			String response = http.toJson(java.util.Map.of(
+					"status", "ACCEPTED",
+					"task_id", taskId,
+					"message", "Result from cache"
+			));
 			http.sendResponse(exchange, 202, response);
 			return;
 		}
 
-		// Cache miss — run async
-		String taskId = TaskManager.createHighLoadTask("CLASS_CODE_SEARCH");
-		logger.info("Started background class code search task: {} for term: {}", taskId, searchTerm);
-
+		// Cache miss → async
 		int offset = HttpUtil.parseInt(params.get("offset"), 0);
 		int limit = HttpUtil.parseInt(params.get("limit"), PageUtil.DEFAULT_PAGE_SIZE);
 
-		CompletableFuture.runAsync(() -> {
-			try {
-				JadxDecompiler decompiler = JadxUtil.getDecompiler();
-				if (decompiler == null) {
-					TaskManager.updateTask(taskId, "FAILED", "Decompiler not available");
-					return;
-				}
+		AsyncTaskHelper.submit("CLASS_CODE_SEARCH", exchange, "Code search started", () -> {
+			JadxDecompiler decompiler = JadxUtil.getDecompiler();
+			if (decompiler == null) throw new RuntimeException("Decompiler not available");
 
-				String lowerTerm = searchTerm.toLowerCase();
-				boolean applyPackageFilter = isValidPackageFilter(packageFilter);
-				boolean searchName = locations.contains(SearchLocation.CLASS_NAME);
+			String lowerTerm = searchTerm.toLowerCase();
+			boolean applyPackageFilter = isValidPackageFilter(packageFilter);
+			boolean searchName = locations.contains(SearchLocation.CLASS_NAME);
 
-				// 使用全局代码索引，避免重复反编译
-				Map<String, String> codeIndex = CodeIndexManager.getInstance().getIndex(decompiler);
+			Map<String, String> codeIndex = CodeIndexManager.getInstance().getIndex(decompiler);
 
-				List<String> matchNames = new ArrayList<>();
-				for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
-					try {
-						String className = entry.getKey();
-						if (applyPackageFilter && packageFilter != null
-								&& !className.startsWith(packageFilter)) {
-							continue;
-						}
-						if (searchName && className.toLowerCase().contains(lowerTerm)) {
-							matchNames.add(className);
-							continue;
-						}
-						if (entry.getValue().toLowerCase().contains(lowerTerm)) {
-							matchNames.add(className);
-						}
-					} catch (Exception ignored) {}
-				}
-
-				CODE_SEARCH_CACHE.put(cacheKey, matchNames);
-
-				// Paginate and store result
-				Map<String, Object> paginated = PageUtil.paginate(
-						matchNames, offset, limit, "class-list", "classes", item -> item
-				);
-				TaskManager.updateTask(taskId, "SUCCESS", http.toJson(paginated));
-
-			} catch (Exception e) {
-				logger.error("Async class code search failed", e);
-				TaskManager.updateTask(taskId, "FAILED", e.getMessage());
+			List<String> matchNames = new ArrayList<>();
+			for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
+				try {
+					String className = entry.getKey();
+					if (applyPackageFilter && packageFilter != null
+							&& !className.startsWith(packageFilter)) {
+						continue;
+					}
+					if (searchName && className.toLowerCase().contains(lowerTerm)) {
+						matchNames.add(className);
+						continue;
+					}
+					if (entry.getValue().toLowerCase().contains(lowerTerm)) {
+						matchNames.add(className);
+					}
+				} catch (Exception ignored) {}
 			}
-		}, PluginServer.getAsyncPool());
 
-		String response = String.format(
-				"{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"Code search started\"}",
-				taskId
-		);
-		http.sendResponse(exchange, 202, response);
+			CODE_SEARCH_CACHE.put(cacheKey, matchNames);
+
+			Map<String, Object> paginated = PageUtil.paginate(
+						matchNames, offset, limit, "class-list", "classes", item -> item
+			);
+			return http.toJson(paginated);
+		});
 	}
-
-	// ====================== Helpers ======================
 
 	private String buildCacheKey(String term, String pkg) {
 		return (term != null ? term.toLowerCase() : "") + "|" + (pkg != null ? pkg : "");

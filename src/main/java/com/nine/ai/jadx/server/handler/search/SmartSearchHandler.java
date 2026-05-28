@@ -1,6 +1,5 @@
 package com.nine.ai.jadx.server.handler.search;
 
-import com.nine.ai.jadx.server.PluginServer;
 import com.nine.ai.jadx.util.*;
 import com.sun.net.httpserver.HttpExchange;
 import jadx.api.JadxDecompiler;
@@ -10,7 +9,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * SmartSearch: class_name 搜索优先（同步），无结果时自动回退到 string 搜索。
@@ -22,15 +20,17 @@ public class SmartSearchHandler {
 
 	public static void handle(HttpExchange exchange) throws IOException {
 		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-		String query = params.get("query");
-		if (query == null || query.isBlank()) {
-			query = params.get("class_name");
+		String queryParam = params.get("query");
+		if (queryParam == null || queryParam.isBlank()) {
+			queryParam = params.get("class_name");
 		}
 
-		if (query == null || query.isBlank()) {
+		if (queryParam == null || queryParam.isBlank()) {
 			http.sendError(exchange, 400, "Missing required parameter: query");
 			return;
 		}
+
+		final String query = queryParam;
 
 		int offset = HttpUtil.parseInt(params.get("offset"), 0);
 		int limit = HttpUtil.parseInt(params.get("limit"), PageUtil.DEFAULT_PAGE_SIZE);
@@ -69,7 +69,6 @@ public class SmartSearchHandler {
 
 			CodeIndexManager indexManager = CodeIndexManager.getInstance();
 			if (indexManager.isIndexed()) {
-				// CodeIndex 就绪 → 同步返回
 				Map<String, String> codeIndex = indexManager.getIndex(decompiler);
 				List<String> stringMatches = new ArrayList<>();
 				for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
@@ -89,37 +88,22 @@ public class SmartSearchHandler {
 			}
 
 			// CodeIndex 未就绪 → 异步
-			String taskId = TaskManager.createHighLoadTask("SMART_SEARCH");
-			final String finalQuery = query;
-
-			CompletableFuture.runAsync(() -> {
-				try {
-					Map<String, String> codeIndex = indexManager.getIndex(decompiler);
-					List<String> stringMatches = new ArrayList<>();
-					for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
-						if (entry.getValue().contains(finalQuery)) {
-							stringMatches.add(entry.getKey());
-						}
+			AsyncTaskHelper.submit("SMART_SEARCH", exchange, "CodeIndex building, string search started", () -> {
+				Map<String, String> codeIndex = indexManager.getIndex(decompiler);
+				List<String> stringMatches = new ArrayList<>();
+				for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
+					if (entry.getValue().contains(query)) {
+						stringMatches.add(entry.getKey());
 					}
-
-					Map<String, Object> paginated = PageUtil.paginate(
-							stringMatches, offset, limit, "smart-search", "results", item -> item
-					);
-					paginated.put("strategy", "string");
-					paginated.put("query", finalQuery);
-
-					TaskManager.updateTask(taskId, "SUCCESS", http.toJson(paginated));
-				} catch (Exception e) {
-					logger.error("SmartSearch string fallback failed", e);
-					TaskManager.updateTask(taskId, "FAILED", e.getMessage());
 				}
-			}, PluginServer.getAsyncPool());
 
-			String response = String.format(
-					"{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"CodeIndex building, string search started\"}",
-					taskId
-			);
-			http.sendResponse(exchange, 202, response);
+				Map<String, Object> paginated = PageUtil.paginate(
+						stringMatches, offset, limit, "smart-search", "results", item -> item
+				);
+				paginated.put("strategy", "string");
+				paginated.put("query", query);
+				return http.toJson(paginated);
+			});
 
 		} catch (Exception e) {
 			logger.error("SmartSearch failed", e);

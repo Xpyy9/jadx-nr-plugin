@@ -1,63 +1,38 @@
 package com.nine.ai.jadx.server.handler.search;
 
-import com.nine.ai.jadx.server.PluginServer;
-import com.nine.ai.jadx.util.HttpUtil;
+import com.nine.ai.jadx.server.handler.basic.BaseDispatcherHandler;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Map;
 
-public class SearchEngineHandler implements HttpHandler {
-	private static final Logger logger = LoggerFactory.getLogger(SearchEngineHandler.class);
-	private final HttpUtil http = HttpUtil.getInstance();
-
-	// 引入原始的搜索 Handler
+public class SearchEngineHandler extends BaseDispatcherHandler {
 	private final HttpHandler methodSearchHandler = new MethodSearchHandler();
 	private final HttpHandler classSearchHandler = new ClassSearchHandler();
 	private final HttpHandler stringSearchHandler = new StringSearchHandler();
 	private final HttpHandler cryptoScanHandler = new CryptoScanHandler();
 
 	@Override
-	public void handle(HttpExchange exchange) throws IOException {
-		if (!PluginServer.getInstance().isRunning()) {
-			http.sendError(exchange, 503, "Service unavailable");
-			return;
-		}
-
-		try {
-			Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-			String action = HttpUtil.sanitizeAction(params.get("action"));
-
-			if (action == null || action.isBlank()) {
-				http.sendError(exchange, 400, "Missing required parameter: 'action'");
-				return;
-			}
-
-			switch (action) {
-				case "searchMethod":
-					methodSearchHandler.handle(exchange);
-					break;
-				case "searchClass":
-					classSearchHandler.handle(exchange);
-					break;
-				case "searchString":
-					stringSearchHandler.handle(exchange);
-					break;
-				case "scanCrypto":
-					cryptoScanHandler.handle(exchange);
-					break;
-				case "smartSearch":
-					SmartSearchHandler.handle(exchange);
-					break;
-				default:
-					http.sendError(exchange, 400, "Invalid search action: " + action);
-			}
-		} catch (Exception e) {
-			logger.error("Search Dispatcher Error", e);
-			http.sendError(exchange, 500, "Internal Server Error: " + e.getMessage());
+	protected void dispatch(HttpExchange exchange, String action, Map<String, String> params) throws IOException {
+		switch (action) {
+			case "searchMethod":
+				methodSearchHandler.handle(exchange);
+				break;
+			case "searchClass":
+				classSearchHandler.handle(exchange);
+				break;
+			case "searchString":
+				stringSearchHandler.handle(exchange);
+				break;
+			case "scanCrypto":
+				cryptoScanHandler.handle(exchange);
+				break;
+			case "smartSearch":
+				SmartSearchHandler.handle(exchange);
+				break;
+			default:
+				http.sendError(exchange, 400, "Invalid search action: " + action);
 		}
 	}
 }

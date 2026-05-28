@@ -6,6 +6,7 @@ import com.nine.ai.jadx.server.handler.code.*;
 import com.nine.ai.jadx.server.handler.resource.*;
 import com.nine.ai.jadx.server.handler.search.*;
 import com.nine.ai.jadx.server.handler.xrefs.XrefsHandler;
+import com.nine.ai.jadx.util.HttpUtil;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -44,6 +45,7 @@ public class PluginServer {
 	private final AtomicBoolean isRunning = new AtomicBoolean(false);
 	private long startTime = 0;
 	private ApkOverviewHandler apkOverviewHandler;
+	private ResourceExplorerHandler resourceExplorerHandler;
 
 	/** 专用异步任务线程池，供搜索/扫描等耗时操作使用 */
 	private static final ExecutorService ASYNC_POOL;
@@ -94,7 +96,8 @@ public class PluginServer {
 
 			// 路由注册
 			route("/codeInsight", new CodeInsightHandler());
-			route("/resourceExplorer", new ResourceExplorerHandler());
+			resourceExplorerHandler = new ResourceExplorerHandler();
+			route("/resourceExplorer", resourceExplorerHandler);
 			route("/searchEngine", new SearchEngineHandler());
 			route("/getXrefs", new XrefsHandler());
 			route("/refactor", new RefactorHandler(mainWindow));
@@ -107,15 +110,17 @@ public class PluginServer {
 			this.startTime = System.currentTimeMillis();
 			LOG.info("JADX Agent Server started on port {}", PORT);
 
-			// Pre-build APK overview + code index in background
-			// so the server is responsive immediately while data loads
 			Thread preloadThread = new Thread(() -> {
 				try {
 					apkOverviewHandler.preload();
 				} catch (Exception e) {
 					LOG.warn("APK overview preload failed, will rebuild on first request", e);
 				}
-				// Pre-build code index after APK overview is ready
+				try {
+					resourceExplorerHandler.getManifestSummaryHandler().preload();
+				} catch (Exception e) {
+					LOG.warn("Manifest summary preload failed, will lazy-load on first request", e);
+				}
 				try {
 					var decompiler = JadxUtil.getDecompiler();
 					if (decompiler != null) {
@@ -161,13 +166,8 @@ public class PluginServer {
 		server.createContext(path, wrap(handler));
 	}
 
-	/**
-	 * 高级异常包装器：
-	 * 1. 统一处理跨域 (CORS)
-	 * 2. 统一处理 OPTIONS 预检请求
-	 * 3. 捕获未处理异常，防止线程崩溃
-	 */
 	private HttpHandler wrap(HttpHandler handler) {
+		HttpUtil http = HttpUtil.getInstance();
 		return exchange -> {
 			try {
 				exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
@@ -181,20 +181,15 @@ public class PluginServer {
 				handler.handle(exchange);
 			} catch (Exception e) {
 				LOG.error("Handler error: {}", exchange.getRequestURI(), e);
-				sendError(exchange, 500, "{\"error\":\"Internal Server Error\",\"source\":\"jadx-plugin\"}");
+				// sendError 自身也可能抛 IOException（如连接已关闭），必须吞掉防止线程崩溃
+				try {
+					http.sendError(exchange, 500, "Internal Server Error");
+				} catch (IOException ignored) {
+				}
 			} finally {
 				exchange.close();
 			}
 		};
-	}
-
-	private static void sendError(HttpExchange exchange, int code, String body) {
-		try {
-			byte[] resp = body.getBytes();
-			exchange.sendResponseHeaders(code, resp.length);
-			exchange.getResponseBody().write(resp);
-		} catch (IOException ignored) {
-		}
 	}
 
 	public long getStartTime() {

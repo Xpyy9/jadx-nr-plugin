@@ -1,7 +1,6 @@
 package com.nine.ai.jadx.server.handler.resource;
 
-import com.nine.ai.jadx.server.PluginServer;
-import com.nine.ai.jadx.util.HttpUtil;
+import com.nine.ai.jadx.server.handler.basic.BaseDispatcherHandler;
 import com.nine.ai.jadx.util.ClassStructureBuilder;
 import com.nine.ai.jadx.util.CodeUtil;
 import com.nine.ai.jadx.util.JadxUtil;
@@ -18,61 +17,49 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-public class ResourceExplorerHandler implements HttpHandler {
+public class ResourceExplorerHandler extends BaseDispatcherHandler {
 	private static final Logger logger = LoggerFactory.getLogger(ResourceExplorerHandler.class);
-	private final HttpUtil http = HttpUtil.getInstance();
 
 	private final HttpHandler mainActivityHandler = new MainActivityHandler();
 	private final HttpHandler mainApplicationHandler = new MainApplicationHandler();
 	private final HttpHandler allResourceHandler = new AllResourceFileNameHandler();
 	private final HttpHandler resourceFileHandler = new SourceHandler();
 	private final HttpHandler manifestDetailHandler = new ManifestDetailHandler();
+	private final ManifestSummaryHandler manifestSummaryHandler = new ManifestSummaryHandler();
 	private final HttpHandler resourceSearchHandler = new ResourceSearchHandler();
 
+	// 正则预编译为常量，避免每次调用时重复编译
+	private static final Pattern EXPORTED_PATTERN = Pattern.compile("android:exported\\s*=\\s*\"([^\"]+)\"");
+
 	@Override
-	public void handle(HttpExchange exchange) throws IOException {
-		if (!PluginServer.getInstance().isRunning()) {
-			http.sendError(exchange, 503, "Service unavailable");
-			return;
-		}
-
-		try {
-			Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
-			String action = HttpUtil.sanitizeAction(params.get("action"));
-
-			if (action == null || action.isBlank()) {
-				http.sendError(exchange, 400, "Missing required parameter: 'action'");
-				return;
-			}
-
-			switch (action) {
-				case "getMainActivity":
-					mainActivityHandler.handle(exchange);
-					break;
-				case "getMainAppClasses":
-					mainApplicationHandler.handle(exchange);
-					break;
-				case "getAllResourceNames":
-					allResourceHandler.handle(exchange);
-					break;
-				case "getResourceFile":
-					resourceFileHandler.handle(exchange);
-					break;
-				case "getManifestDetail":
-					manifestDetailHandler.handle(exchange);
-					break;
-				case "searchResourceContent":
-					resourceSearchHandler.handle(exchange);
-					break;
-				case "analyzeComponent":
-					handleAnalyzeComponent(exchange);
-					break;
-				default:
-					http.sendError(exchange, 400, "Invalid resource action: " + action);
-			}
-		} catch (Exception e) {
-			logger.error("Resource Dispatcher Error", e);
-			http.sendError(exchange, 500, "Internal Server Error: " + e.getMessage());
+	protected void dispatch(HttpExchange exchange, String action, Map<String, String> params) throws IOException {
+		switch (action) {
+			case "getMainActivity":
+				mainActivityHandler.handle(exchange);
+				break;
+			case "getMainAppClasses":
+				mainApplicationHandler.handle(exchange);
+				break;
+			case "getAllResourceNames":
+				allResourceHandler.handle(exchange);
+				break;
+			case "getResourceFile":
+				resourceFileHandler.handle(exchange);
+				break;
+			case "getManifestDetail":
+				manifestDetailHandler.handle(exchange);
+				break;
+			case "getManifestSummary":
+				manifestSummaryHandler.handle(exchange);
+				break;
+			case "searchResourceContent":
+				resourceSearchHandler.handle(exchange);
+				break;
+			case "analyzeComponent":
+				handleAnalyzeComponent(exchange, params);
+				break;
+			default:
+				http.sendError(exchange, 400, "Invalid resource action: " + action);
 		}
 	}
 
@@ -80,8 +67,7 @@ public class ResourceExplorerHandler implements HttpHandler {
 	 * analyzeComponent: one-shot analysis returning manifest metadata + class structure + code.
 	 * Replaces 3 separate API calls (getManifestDetail + getClassStructure + getClassCode).
 	 */
-	private void handleAnalyzeComponent(HttpExchange exchange) throws IOException {
-		Map<String, String> params = http.parseParams(exchange.getRequestURI().getQuery());
+	private void handleAnalyzeComponent(HttpExchange exchange, Map<String, String> params) throws IOException {
 		String componentName = params.get("component_name");
 		if (componentName == null || componentName.isBlank()) {
 			http.sendError(exchange, 400, "Missing required parameter: component_name");
@@ -111,7 +97,6 @@ public class ResourceExplorerHandler implements HttpHandler {
 				if (exported != null) {
 					manifest.put("exported", "true".equals(exported));
 				}
-				// Check if component has permission
 				manifest.put("has_permission", hasComponentPermission(xml, componentName));
 				result.put("manifest", manifest);
 
@@ -146,7 +131,7 @@ public class ResourceExplorerHandler implements HttpHandler {
 		String block = xml.substring(idx, Math.min(xml.length(), idx + 500));
 		int closeTag = block.indexOf(">");
 		if (closeTag > 0) block = block.substring(0, closeTag);
-		java.util.regex.Matcher m = Pattern.compile("android:exported\\s*=\\s*\"([^\"]+)\"").matcher(block);
+		java.util.regex.Matcher m = EXPORTED_PATTERN.matcher(block);
 		return m.find() ? m.group(1) : null;
 	}
 
@@ -158,5 +143,9 @@ public class ResourceExplorerHandler implements HttpHandler {
 		int closeTag = block.indexOf(">");
 		if (closeTag > 0) block = block.substring(0, closeTag);
 		return block.contains("android:permission");
+	}
+
+	public ManifestSummaryHandler getManifestSummaryHandler() {
+		return manifestSummaryHandler;
 	}
 }

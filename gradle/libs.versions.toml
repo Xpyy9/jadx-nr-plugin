@@ -1,0 +1,15 @@
+[versions]
+jadx = "1.5.5"
+logback = "1.5.16"
+gson = "2.10.1"
+shadow = "8.1.1"
+
+[libraries]
+jadx-core = { module = "io.github.skylot:jadx-core", version.ref = "jadx" }
+jadx-gui = { module = "io.github.skylot:jadx-gui", version.ref = "jadx" }
+rsyntaxtextarea = { module = "com.fifesoft:rsyntaxtextarea", version = "3.3.4" }
+logback = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+
+[plugins]
+shadow = { id = "com.github.johnrengelman.shadow", version.ref = "shadow" }

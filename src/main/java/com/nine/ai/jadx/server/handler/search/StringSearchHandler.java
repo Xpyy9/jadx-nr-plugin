@@ -1,6 +1,5 @@
 package com.nine.ai.jadx.server.handler.search;
 
-import com.nine.ai.jadx.server.PluginServer;
 import com.nine.ai.jadx.util.*;
 import com.sun.net.httpserver.*;
 import jadx.api.JadxDecompiler;
@@ -9,7 +8,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * 字符串搜索 — CodeIndex 就绪时同步返回 200，否则走异步 202。
@@ -87,35 +85,23 @@ public class StringSearchHandler implements HttpHandler {
 			return;
 		}
 
-		// CodeIndex 未就绪 → 异步构建 + 搜索，返回 202
-		String taskId = TaskManager.createHighLoadTask("STRING_SEARCH");
-		logger.info("CodeIndex not ready, started async string search task: {}", taskId);
+		// CodeIndex 未就绪 → 异步
+		AsyncTaskHelper.submit("STRING_SEARCH", exchange, "CodeIndex building, search started", () -> {
+			JadxDecompiler decompiler = JadxUtil.getDecompiler();
+			if (decompiler == null) throw new RuntimeException("Decompiler not available");
 
-		CompletableFuture.runAsync(() -> {
-			try {
-				JadxDecompiler decompiler = JadxUtil.getDecompiler();
-				if (decompiler == null) {
-					TaskManager.updateTask(taskId, "FAILED", "Decompiler not available");
-					return;
+			Map<String, String> codeIndex = indexManager.getIndex(decompiler);
+			List<String> results = new ArrayList<>();
+			for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
+				if (entry.getValue().contains(query)) {
+					results.add(entry.getKey());
 				}
-
-				Map<String, String> codeIndex = indexManager.getIndex(decompiler);
-				List<String> results = new ArrayList<>();
-				for (Map.Entry<String, String> entry : codeIndex.entrySet()) {
-					if (entry.getValue().contains(query)) {
-						results.add(entry.getKey());
-					}
-				}
-
-				SEARCH_CACHE.put(query, results);
-				TaskManager.updateTask(taskId, "SUCCESS", http.toJson(results));
-			} catch (Exception e) {
-				logger.error("Async string search failed", e);
-				TaskManager.updateTask(taskId, "FAILED", e.getMessage());
 			}
-		}, PluginServer.getAsyncPool());
 
-		String response = String.format("{\"status\":\"ACCEPTED\", \"task_id\":\"%s\", \"message\":\"CodeIndex building, search started\"}", taskId);
-		http.sendResponse(exchange, 202, response);
+			SEARCH_CACHE.put(query, results);
+			return http.toJson(PageUtil.paginate(
+					results, offset, limit, "string-search-results", "classes", item -> item
+			));
+		});
 	}
 }
