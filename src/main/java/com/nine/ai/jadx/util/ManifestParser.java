@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 
 /**
  * 共享 Manifest 解析工具类。
- * 提取 ManifestDetailHandler、ApkOverviewHandler、MainActivityHandler 中重复的逻辑。
+ * 提供基础 XML 属性提取和组件名解析，供 ManifestAnalyzer 和其他组件复用。
  */
 public class ManifestParser {
 
@@ -55,7 +55,7 @@ public class ManifestParser {
 	}
 
 	/**
-	 * 提取指定标签的所有组件名称（仅名称列表，用于 ApkOverview 等简单场景）。
+	 * 提取指定标签的所有组件名称（仅名称列表）。
 	 */
 	public static List<String> extractComponentNames(String xml, String tagPrefix, String pkg) {
 		List<String> result = new ArrayList<>();

@@ -1,10 +1,7 @@
 package com.nine.ai.jadx.util;
 
+import com.nine.ai.jadx.core.CodeIndexManager;
 import com.nine.ai.jadx.server.PluginServer;
-import com.nine.ai.jadx.server.handler.search.CryptoScanHandler;
-import com.nine.ai.jadx.server.handler.search.ClassSearchHandler;
-import com.nine.ai.jadx.server.handler.search.MethodSearchHandler;
-import com.nine.ai.jadx.server.handler.search.StringSearchHandler;
 import jadx.api.JadxDecompiler;
 import jadx.api.ResourceFile;
 import jadx.api.plugins.gui.JadxGuiContext;
@@ -18,141 +15,96 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class JadxUtil {
-	private static final Logger LOG = LoggerFactory.getLogger(JadxUtil.class);
+    private static final Logger LOG = LoggerFactory.getLogger(JadxUtil.class);
 
-	// 全局缓存
-	private static Map<String, ResourceFile> resourceCache = new HashMap<>();
+    private static Map<String, ResourceFile> resourceCache = new HashMap<>();
+    private static volatile JadxDecompiler cachedDecompiler = null;
 
-	/** 缓存反射获取的 decompiler 实例（实例在整个 APK 会话中不变） */
-	private static volatile JadxDecompiler cachedDecompiler = null;
+    // ====================== 获取反编译器 ======================
 
-	// ====================== 获取反编译器 ======================
-	public static JadxDecompiler getDecompiler() {
-		return getDecompiler(true);
-	}
+    public static JadxDecompiler getDecompiler() {
+        return getDecompiler(true);
+    }
 
-	/**
-	 * @param logError true = log errors normally; false = silent (for polling loops)
-	 */
-	public static JadxDecompiler getDecompiler(boolean logError) {
-		// 优先返回缓存
-		JadxDecompiler cached = cachedDecompiler;
-		if (cached != null) {
-			return cached;
-		}
+    public static JadxDecompiler getDecompiler(boolean logError) {
+        JadxDecompiler cached = cachedDecompiler;
+        if (cached != null) {
+            return cached;
+        }
 
-		try {
-			JadxGuiContext guiContext = PluginServer.getInstance().getGuiContext();
-			if (!(guiContext instanceof GuiPluginContext)) {
-				return null;
-			}
+        try {
+            PluginServer server = PluginServer.getInstance();
+            if (server == null) return null;
 
-			GuiPluginContext ctx = (GuiPluginContext) guiContext;
-			MainWindow mainWindow = ctx.getCommonContext().getMainWindow();
-			if (mainWindow == null) {
-				return null;
-			}
+            JadxGuiContext guiContext = server.getGuiContext();
+            if (!(guiContext instanceof GuiPluginContext)) {
+                return null;
+            }
 
-			Object wrapper = mainWindow.getWrapper();
-			if (wrapper == null) {
-				return null;
-			}
+            GuiPluginContext ctx = (GuiPluginContext) guiContext;
+            MainWindow mainWindow = ctx.getCommonContext().getMainWindow();
+            if (mainWindow == null) return null;
 
-			Method method = wrapper.getClass().getMethod("getDecompiler");
-			JadxDecompiler decompiler = (JadxDecompiler) method.invoke(wrapper);
+            Object wrapper = mainWindow.getWrapper();
+            if (wrapper == null) return null;
 
-			if (decompiler != null) {
-				cachedDecompiler = decompiler; // 缓存成功获取的实例
-			}
-			return decompiler;
-		} catch (Exception e) {
-			if (logError) {
-				LOG.error("获取 JadxDecompiler 失败", e);
-			}
-			return null;
-		}
-	}
+            Method method = wrapper.getClass().getMethod("getDecompiler");
+            JadxDecompiler decompiler = (JadxDecompiler) method.invoke(wrapper);
 
-	// ====================== 资源缓存 ======================
-	public static synchronized Map<String, ResourceFile> getResourceCache(JadxDecompiler decompiler) {
-		if (decompiler == null) {
-			return new HashMap<>();
-		}
-		if (resourceCache.isEmpty()) {
-			for (ResourceFile res : decompiler.getResources()) {
-				if (res == null) continue;
+            if (decompiler != null) {
+                cachedDecompiler = decompiler;
+            }
+            return decompiler;
+        } catch (Exception e) {
+            if (logError) {
+                LOG.error("Failed to get JadxDecompiler", e);
+            }
+            return null;
+        }
+    }
 
-				String orig = res.getOriginalName();
-				String deobf = res.getDeobfName();
+    // ====================== 资源缓存 ======================
 
-				if (orig != null) resourceCache.put(orig, res);
-				if (deobf != null) resourceCache.put(deobf, res);
+    public static synchronized Map<String, ResourceFile> getResourceCache(JadxDecompiler decompiler) {
+        if (decompiler == null) return new HashMap<>();
+        if (resourceCache.isEmpty()) {
+            for (ResourceFile res : decompiler.getResources()) {
+                if (res == null) continue;
+                String orig = res.getOriginalName();
+                String deobf = res.getDeobfName();
+                if (orig != null) resourceCache.put(orig, res);
+                if (deobf != null) resourceCache.put(deobf, res);
+                String uni = (deobf != null ? deobf : orig).replace('\\', '/');
+                resourceCache.put(uni, res);
+                resourceCache.put(uni.toLowerCase(), res);
+            }
+        }
+        return resourceCache;
+    }
 
-				// 兼容路径
-				String uni = (deobf != null ? deobf : orig).replace('\\', '/');
-				resourceCache.put(uni, res);
-				resourceCache.put(uni.toLowerCase(), res);
-			}
-		}
-		return resourceCache;
-	}
+    // ====================== 清空缓存 ======================
 
-	// ====================== 清空缓存 ======================
-	public static synchronized void clearCaches() {
-		if (resourceCache != null) {
-			resourceCache.clear();
-		}
-		CodeUtil.clearClassCache();
-		CodeIndexManager.getInstance().invalidate();
+    public static synchronized void clearCaches() {
+        cachedDecompiler = null;
+        if (resourceCache != null) {
+            resourceCache.clear();
+        }
+        CodeUtil.clearClassCache();
+        CodeIndexManager.getInstance().invalidate();
+        LOG.info("JadxUtil: All caches cleared");
+    }
 
-		// 清除搜索相关缓存
-		StringSearchHandler.clearSearchCache();
-		ClassSearchHandler.clearSearchCache();
-		MethodSearchHandler.clearMethodCache();
-		CryptoScanHandler.clearScanCache();
-
-		// Clear the APK overview cache as well
-		PluginServer server = PluginServer.getInstance();
-		if (server != null && server.getApkOverviewHandler() != null) {
-			server.getApkOverviewHandler().clearCache();
-		}
-
-		LOG.info("JadxUtil 全部缓存已清空（资源/代码/索引/搜索）");
-	}
-
-	public static String getResourceContent(ResourceFile res) {
-		if (res == null) return null;
-		try {
-			var content = res.loadContent();
-			if (content == null) return null;
-
-			var text = content.getText();
-			if (text != null) {
-				return text.getCodeStr();
-			}
-
-			return content.toString();
-		} catch (Exception e) {
-			LOG.error("读取资源失败", e);
-			return "// [WARNING] JADX failed to parse or read this resource content. File might be corrupted or unsupported.";
-		}
-	}
-
-	public static String getArscResourceContent(ResourceFile arscFile, String targetFileName) {
-		if (arscFile == null) return null;
-		try {
-			var content = arscFile.loadContent();
-			if (content == null || content.getSubFiles() == null) return null;
-
-			for (var subFile : content.getSubFiles()) {
-				if (subFile != null && targetFileName.equals(subFile.getFileName())) {
-					var text = subFile.getText();
-					return text != null ? text.getCodeStr() : null;
-				}
-			}
-		} catch (Exception ignored) {
-			LOG.error("读取 arsc 子文件失败: " + targetFileName);
-		}
-		return null;
-	}
+    public static String getResourceContent(ResourceFile res) {
+        if (res == null) return null;
+        try {
+            var content = res.loadContent();
+            if (content == null) return null;
+            var text = content.getText();
+            if (text != null) return text.getCodeStr();
+            return content.toString();
+        } catch (Exception e) {
+            LOG.error("Failed to read resource", e);
+            return null;
+        }
+    }
 }

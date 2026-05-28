@@ -1,0 +1,46 @@
+version: "1.0"
+category: "dynamic_code"
+
+rules:
+  - id: dex_class_loader
+    severity: high
+    name: "动态加载 DEX"
+    description: "运行时加载外部 DEX 文件，可能加载恶意代码"
+    match:
+      type: pattern
+      any:
+        - method_invoke: "dalvik.system.DexClassLoader.<init>"
+        - method_invoke: "dalvik.system.PathClassLoader.<init>"
+        - method_invoke: "dalvik.system.InMemoryDexClassLoader.<init>"
+    tags: ["cwe-494"]
+
+  - id: runtime_exec
+    severity: critical
+    name: "命令执行"
+    description: "调用 Runtime.exec 或 ProcessBuilder 执行系统命令"
+    match:
+      type: pattern
+      any:
+        - method_invoke: "java.lang.Runtime.exec"
+        - method_invoke: "java.lang.ProcessBuilder.<init>"
+    tags: ["cwe-78"]
+
+  - id: reflection_invoke
+    severity: medium
+    name: "反射调用"
+    description: "使用反射调用方法，可能绕过访问控制"
+    match:
+      type: method_invoke
+      target: "java.lang.reflect.Method.invoke"
+    tags: ["cwe-470"]
+
+  - id: native_library_load
+    severity: medium
+    name: "加载原生库"
+    description: "通过 System.loadLibrary 加载 JNI 原生库"
+    match:
+      type: pattern
+      any:
+        - string_contains: "System.loadLibrary"
+        - string_contains: "System.load("
+    tags: ["cwe-114"]

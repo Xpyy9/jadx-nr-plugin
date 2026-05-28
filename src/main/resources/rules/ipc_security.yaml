@@ -1,0 +1,35 @@
+version: "1.0"
+category: "ipc_security"
+
+rules:
+  - id: implicit_broadcast
+    severity: medium
+    name: "隐式广播发送"
+    description: "sendBroadcast 无指定目标，任何应用可接收"
+    match:
+      type: method_invoke
+      target: "android.content.Context.sendBroadcast"
+    tags: ["cwe-927"]
+
+  - id: pending_intent_mutable
+    severity: high
+    name: "可变 PendingIntent"
+    description: "PendingIntent 未设置 FLAG_IMMUTABLE，可能被劫持"
+    match:
+      type: pattern
+      all:
+        - string_contains: "PendingIntent"
+        - type: pattern
+          not_contains: "FLAG_IMMUTABLE"
+    tags: ["cwe-927"]
+
+  - id: intent_data_unvalidated
+    severity: medium
+    name: "Intent 数据未校验"
+    description: "直接使用 getIntent().getData() 未做合法性校验"
+    match:
+      type: pattern
+      all:
+        - method_invoke: "android.app.Activity.getIntent"
+        - method_invoke: "android.content.Intent.getData"
+    tags: ["cwe-20"]

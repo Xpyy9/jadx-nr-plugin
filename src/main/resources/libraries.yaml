@@ -1,0 +1,154 @@
+# libraries.yaml — Third-party library prefix identification
+# Used by CodeIndexManager to filter out non-app code from analysis
+version: "1.0"
+
+known_libraries:
+  # Google
+  - prefix: "com.google.firebase"
+    name: "Firebase"
+  - prefix: "com.google.android.gms"
+    name: "Google Play Services"
+  - prefix: "com.google.android.material"
+    name: "Material Design"
+  - prefix: "com.google.gson"
+    name: "Gson"
+  - prefix: "com.google.protobuf"
+    name: "Protocol Buffers"
+  - prefix: "com.google.common"
+    name: "Guava"
+  - prefix: "com.google.crypto.tink"
+    name: "Tink"
+
+  # Square
+  - prefix: "com.squareup.okhttp3"
+    name: "OkHttp"
+  - prefix: "com.squareup.okio"
+    name: "Okio"
+  - prefix: "com.squareup.picasso"
+    name: "Picasso"
+  - prefix: "com.squareup.moshi"
+    name: "Moshi"
+  - prefix: "com.squareup.leakcanary"
+    name: "LeakCanary"
+
+  # Networking
+  - prefix: "retrofit2"
+    name: "Retrofit"
+  - prefix: "okhttp3"
+    name: "OkHttp"
+  - prefix: "com.android.volley"
+    name: "Volley"
+
+  # DI
+  - prefix: "dagger"
+    name: "Dagger"
+  - prefix: "javax.inject"
+    name: "javax.inject"
+  - prefix: "com.google.dagger"
+    name: "Dagger/Hilt"
+
+  # Reactive
+  - prefix: "io.reactivex"
+    name: "RxJava"
+  - prefix: "kotlinx.coroutines"
+    name: "Coroutines"
+  - prefix: "kotlin.coroutines"
+    name: "Kotlin Coroutines"
+  - prefix: "kotlinx.serialization"
+    name: "Kotlin Serialization"
+
+  # Image
+  - prefix: "com.bumptech.glide"
+    name: "Glide"
+  - prefix: "com.github.bumptech"
+    name: "Glide"
+  - prefix: "coil"
+    name: "Coil"
+  - prefix: "com.facebook.fresco"
+    name: "Fresco"
+
+  # UI
+  - prefix: "com.airbnb.lottie"
+    name: "Lottie"
+  - prefix: "com.airbnb.epoxy"
+    name: "Epoxy"
+
+  # Events
+  - prefix: "org.greenrobot.eventbus"
+    name: "EventBus"
+
+  # JSON/Data
+  - prefix: "com.fasterxml.jackson"
+    name: "Jackson"
+  - prefix: "org.json"
+    name: "org.json"
+
+  # Apache
+  - prefix: "org.apache.commons"
+    name: "Apache Commons"
+  - prefix: "org.apache.http"
+    name: "Apache HttpClient"
+
+  # Database
+  - prefix: "io.realm"
+    name: "Realm"
+  - prefix: "net.sqlcipher"
+    name: "SQLCipher"
+  - prefix: "androidx.room"
+    name: "Room"
+
+  # AndroidX / Support
+  - prefix: "androidx"
+    name: "AndroidX"
+  - prefix: "android.support"
+    name: "Android Support Library"
+
+  # Crash/Analytics
+  - prefix: "com.crashlytics"
+    name: "Crashlytics"
+  - prefix: "io.sentry"
+    name: "Sentry"
+  - prefix: "com.adjust.sdk"
+    name: "Adjust"
+  - prefix: "com.appsflyer"
+    name: "AppsFlyer"
+  - prefix: "com.amplitude"
+    name: "Amplitude"
+  - prefix: "com.mixpanel"
+    name: "Mixpanel"
+
+  # Social SDK
+  - prefix: "com.facebook"
+    name: "Facebook SDK"
+  - prefix: "com.twitter"
+    name: "Twitter SDK"
+
+  # Crypto
+  - prefix: "org.bouncycastle"
+    name: "Bouncy Castle"
+  - prefix: "org.conscrypt"
+    name: "Conscrypt"
+
+  # Other
+  - prefix: "com.jakewharton"
+    name: "Jake Wharton Libraries"
+  - prefix: "timber.log"
+    name: "Timber"
+  - prefix: "org.jetbrains.annotations"
+    name: "JetBrains Annotations"
+  - prefix: "kotlin"
+    name: "Kotlin Stdlib"
+
+  # China SDK
+  - prefix: "com.tencent"
+    name: "Tencent SDK"
+  - prefix: "com.alibaba"
+    name: "Alibaba SDK"
+  - prefix: "com.bytedance"
+    name: "ByteDance SDK"
+  - prefix: "com.baidu"
+    name: "Baidu SDK"
+  - prefix: "cn.jpush"
+    name: "JPush"
+  - prefix: "com.umeng"
+    name: "Umeng"

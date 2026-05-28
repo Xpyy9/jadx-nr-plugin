@@ -1,0 +1,77 @@
+version: "1.0"
+category: "root_detection"
+
+rules:
+  - id: root_check_su
+    severity: info
+    name: "Root Check via su Binary"
+    description: "Application checks for su binary existence (root detection)"
+    match:
+      type: string_contains
+      patterns:
+        - "/system/xbin/su"
+        - "/system/bin/su"
+        - "/sbin/su"
+        - "/system/app/Superuser"
+    tags: ["root-detection"]
+
+  - id: root_check_build_tags
+    severity: info
+    name: "Root Check via Build Tags"
+    description: "Application checks Build.TAGS for test-keys (root detection)"
+    match:
+      type: string_contains
+      patterns:
+        - "test-keys"
+        - "Build.TAGS"
+    tags: ["root-detection"]
+
+  - id: root_check_packages
+    severity: info
+    name: "Root Check via Package Detection"
+    description: "Application checks for root management packages"
+    match:
+      type: string_contains
+      patterns:
+        - "com.topjohnwu.magisk"
+        - "eu.chainfire.supersu"
+        - "com.koushikdutta.superuser"
+        - "com.noshufou.android.su"
+    tags: ["root-detection"]
+
+  - id: emulator_detection
+    severity: info
+    name: "Emulator Detection"
+    description: "Application checks for emulator environment"
+    match:
+      type: string_contains
+      patterns:
+        - "generic_x86"
+        - "google_sdk"
+        - "sdk_gphone"
+        - "goldfish"
+        - "ranchu"
+    tags: ["anti-tampering"]
+
+  - id: frida_detection
+    severity: info
+    name: "Frida Detection"
+    description: "Application checks for Frida instrumentation framework"
+    match:
+      type: string_contains
+      patterns:
+        - "frida"
+        - "linjector"
+        - "27042"
+    tags: ["anti-tampering"]
+
+  - id: debug_detection
+    severity: info
+    name: "Debug Detection"
+    description: "Application implements anti-debugging checks"
+    match:
+      type: pattern
+      any:
+        - method_invoke: "android.os.Debug.isDebuggerConnected"
+        - string_contains: "isDebuggerConnected"
+    tags: ["anti-tampering"]

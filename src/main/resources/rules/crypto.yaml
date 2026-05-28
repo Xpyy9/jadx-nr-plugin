@@ -1,0 +1,57 @@
+version: "1.0"
+category: "crypto"
+
+rules:
+  - id: weak_crypto_des
+    severity: high
+    name: "DES 弱加密算法"
+    description: "使用已被破解的 DES 对称加密算法"
+    match:
+      type: method_invoke
+      target: "javax.crypto.Cipher.getInstance"
+      args_contain: ["DES"]
+    context_lines: 3
+    remediation: "使用 AES-256-GCM 替代 DES"
+    tags: ["owasp-m5", "cwe-327"]
+
+  - id: ecb_mode
+    severity: high
+    name: "ECB 模式使用"
+    description: "ECB 模式不提供语义安全性，相同明文产生相同密文"
+    match:
+      type: method_invoke
+      target: "javax.crypto.Cipher.getInstance"
+      args_contain: ["ECB"]
+    context_lines: 3
+    tags: ["cwe-327"]
+
+  - id: hardcoded_crypto_key
+    severity: critical
+    name: "硬编码加密密钥"
+    description: "SecretKeySpec 使用字面量字节数组或字符串构造密钥"
+    match:
+      type: pattern
+      all:
+        - method_invoke: "javax.crypto.spec.SecretKeySpec.<init>"
+        - type: has_literal_arg
+    tags: ["owasp-m5", "cwe-798"]
+
+  - id: weak_hash_md5
+    severity: high
+    name: "MD5 哈希"
+    description: "MD5 存在碰撞攻击，不应用于安全场景"
+    match:
+      type: method_invoke
+      target: "java.security.MessageDigest.getInstance"
+      args_contain: ["MD5"]
+    tags: ["cwe-328"]
+
+  - id: weak_hash_sha1
+    severity: medium
+    name: "SHA1 哈希"
+    description: "SHA1 存在理论碰撞攻击，建议使用 SHA-256 或更高"
+    match:
+      type: method_invoke
+      target: "java.security.MessageDigest.getInstance"
+      args_contain: ["SHA-1", "SHA1"]
+    tags: ["cwe-328"]

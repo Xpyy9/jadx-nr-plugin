@@ -22,7 +22,8 @@ build/
 classes/
 .gradle/
 local.properties
-
+build.gradle.kts
+gradle/libs.versions.toml
 # Temp files
 *-tmp/
 **/tmp/

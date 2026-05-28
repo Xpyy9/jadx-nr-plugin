@@ -26,6 +26,7 @@ dependencies {
 
 	implementation(libs.logback)
 	implementation(libs.gson)
+	implementation(libs.snakeyaml)
 
 	testImplementation("org.junit.jupiter:junit-jupiter:5.12.1")
 }

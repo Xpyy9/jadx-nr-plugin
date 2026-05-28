@@ -1,0 +1,36 @@
+version: "1.0"
+category: "ssl_tls"
+
+rules:
+  - id: ssl_trust_all
+    severity: critical
+    name: "信任所有证书"
+    description: "自定义 X509TrustManager 可能信任所有证书，导致 MITM"
+    match:
+      type: class_inherit
+      implements: "javax.net.ssl.X509TrustManager"
+    context_lines: 5
+    remediation: "使用系统默认 TrustManager 或固定证书"
+    tags: ["owasp-m3", "cwe-295"]
+
+  - id: hostname_verifier_bypass
+    severity: critical
+    name: "HostnameVerifier 绕过"
+    description: "自定义 HostnameVerifier 可能允许任意主机名"
+    match:
+      type: pattern
+      any:
+        - class_inherit: "javax.net.ssl.HostnameVerifier"
+        - string_contains: "ALLOW_ALL_HOSTNAME_VERIFIER"
+    tags: ["cwe-295"]
+
+  - id: ssl_error_handler
+    severity: high
+    name: "WebView SSL 错误处理"
+    description: "onReceivedSslError 中调用 proceed() 忽略证书错误"
+    match:
+      type: pattern
+      all:
+        - string_contains: "onReceivedSslError"
+        - string_contains: "proceed"
+    tags: ["cwe-295"]

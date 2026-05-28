@@ -1,0 +1,41 @@
+version: "1.0"
+category: "data_storage"
+
+rules:
+  - id: shared_prefs_world_readable
+    severity: high
+    name: "SharedPreferences 全局可读"
+    description: "MODE_WORLD_READABLE 允许其他应用读取数据"
+    match:
+      type: string_contains
+      value: "MODE_WORLD_READABLE"
+    tags: ["cwe-922"]
+
+  - id: shared_prefs_world_writable
+    severity: critical
+    name: "SharedPreferences 全局可写"
+    description: "MODE_WORLD_WRITABLE 允许其他应用修改数据"
+    match:
+      type: string_contains
+      value: "MODE_WORLD_WRITABLE"
+    tags: ["cwe-922"]
+
+  - id: external_storage_write
+    severity: medium
+    name: "外部存储写入"
+    description: "写入外部存储的数据可被任何应用访问"
+    match:
+      type: method_invoke
+      target: "android.os.Environment.getExternalStorageDirectory"
+    tags: ["cwe-922"]
+
+  - id: sqlite_plaintext
+    severity: medium
+    name: "SQLite 明文存储"
+    description: "SQLite 数据库未加密，root 设备可直接读取"
+    match:
+      type: pattern
+      any:
+        - method_invoke: "android.database.sqlite.SQLiteDatabase.openOrCreateDatabase"
+        - string_contains: "SQLiteOpenHelper"
+    tags: ["cwe-312"]

@@ -1,0 +1,44 @@
+version: "1.0"
+category: "webview"
+
+rules:
+  - id: webview_js_interface
+    severity: high
+    name: "JavaScript Bridge"
+    description: "addJavascriptInterface 暴露 Java 对象给 JavaScript，API<17 存在 RCE"
+    match:
+      type: method_invoke
+      target: "android.webkit.WebView.addJavascriptInterface"
+    context_lines: 3
+    tags: ["cwe-749"]
+
+  - id: webview_file_access
+    severity: high
+    name: "WebView 文件访问"
+    description: "允许 WebView 访问文件系统，可能导致本地文件泄露"
+    match:
+      type: pattern
+      any:
+        - method_invoke: "android.webkit.WebSettings.setAllowFileAccess"
+        - method_invoke: "android.webkit.WebSettings.setAllowUniversalAccessFromFileURLs"
+    tags: ["cwe-200"]
+
+  - id: webview_js_enabled_loadurl
+    severity: high
+    name: "启用 JS 的 WebView 加载外部 URL"
+    description: "同时启用 JavaScript 并加载外部 URL，可能存在 XSS"
+    match:
+      type: pattern
+      all:
+        - method_invoke: "android.webkit.WebSettings.setJavaScriptEnabled"
+        - method_invoke: "android.webkit.WebView.loadUrl"
+    tags: ["cwe-79"]
+
+  - id: webview_debug_enabled
+    severity: medium
+    name: "WebView 调试启用"
+    description: "setWebContentsDebuggingEnabled(true) 允许远程调试 WebView"
+    match:
+      type: string_contains
+      value: "setWebContentsDebuggingEnabled"
+    tags: ["cwe-489"]

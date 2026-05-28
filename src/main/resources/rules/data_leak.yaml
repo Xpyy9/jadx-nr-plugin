@@ -1,0 +1,103 @@
+# rules/data_leak.yaml
+version: "1.0"
+category: "data_leak"
+
+rules:
+  - id: log_sensitive_data
+    severity: medium
+    name: "日志泄露敏感数据"
+    description: "在日志中输出可能包含敏感信息的数据（密码、token、密钥等）"
+    match:
+      type: pattern
+      all:
+        - type: method_invoke
+          target: "android.util.Log"
+        - type: string_contains
+          value: "password"
+    context_lines: 3
+    remediation: "移除日志中的敏感数据，或使用 ProGuard/R8 在 release 版本中剥离日志调用"
+    tags: ["owasp-m9", "cwe-532"]
+
+  - id: log_token_leak
+    severity: medium
+    name: "日志泄露 Token"
+    description: "在日志中输出 token、session、auth 等敏感凭据"
+    match:
+      type: pattern
+      all:
+        - type: method_invoke
+          target: "android.util.Log"
+        - type: string_contains
+          value: "token"
+    context_lines: 3
+    tags: ["cwe-532"]
+
+  - id: clipboard_sensitive_data
+    severity: high
+    name: "剪贴板存储敏感数据"
+    description: "将敏感数据写入剪贴板，其他应用可读取"
+    match:
+      type: method_invoke
+      target: "android.content.ClipboardManager.setPrimaryClip"
+    context_lines: 3
+    remediation: "避免将密码/token等敏感数据写入剪贴板"
+    tags: ["owasp-m9", "cwe-200"]
+
+  - id: external_storage_write
+    severity: high
+    name: "外部存储写入"
+    description: "向外部存储写入数据，其他应用可读取"
+    match:
+      type: method_invoke
+      target: "android.os.Environment.getExternalStorageDirectory"
+    context_lines: 3
+    remediation: "使用应用私有目录(getFilesDir/getCacheDir)或 Scoped Storage"
+    tags: ["owasp-m2", "cwe-922"]
+
+  - id: world_readable_file
+    severity: high
+    name: "全局可读文件"
+    description: "使用 MODE_WORLD_READABLE 创建文件，其他应用可读取"
+    match:
+      type: string_contains
+      value: "MODE_WORLD_READABLE"
+    context_lines: 3
+    remediation: "使用 MODE_PRIVATE 替代"
+    tags: ["owasp-m2", "cwe-732"]
+
+  - id: world_writable_file
+    severity: critical
+    name: "全局可写文件"
+    description: "使用 MODE_WORLD_WRITABLE 创建文件，其他应用可修改"
+    match:
+      type: string_contains
+      value: "MODE_WORLD_WRITABLE"
+    context_lines: 3
+    remediation: "使用 MODE_PRIVATE 替代"
+    tags: ["owasp-m2", "cwe-732"]
+
+  - id: unencrypted_shared_prefs
+    severity: medium
+    name: "未加密 SharedPreferences"
+    description: "使用普通 SharedPreferences 存储数据，root 设备上可读取"
+    match:
+      type: pattern
+      all:
+        - type: method_invoke
+          target: "android.content.Context.getSharedPreferences"
+        - type: pattern
+          not_contains: "EncryptedSharedPreferences"
+    context_lines: 3
+    remediation: "使用 EncryptedSharedPreferences 存储敏感数据"
+    tags: ["owasp-m2", "cwe-312"]
+
+  - id: sqlite_unencrypted
+    severity: medium
+    name: "未加密 SQLite 数据库"
+    description: "使用未加密的 SQLite 数据库，root 设备上可读取"
+    match:
+      type: method_invoke
+      target: "android.database.sqlite.SQLiteOpenHelper"
+    context_lines: 3
+    remediation: "使用 SQLCipher 或 Room + encrypted database 加密数据库"
+    tags: ["owasp-m2", "cwe-312"]

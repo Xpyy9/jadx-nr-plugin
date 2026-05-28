@@ -1,815 +1,912 @@
-# JADX-NR-Plugin API Reference — Agent Integration Guide
+# JADX-NR-Plugin API Reference
 
 > **Base URL**: `http://localhost:13997`
-> **Content-Type**: 所有响应均为 `application/json; charset=UTF-8`
-> **CORS**: 已全局启用（`Access-Control-Allow-Origin: *`）
-> **Agent 首要动作**: 启动后先调用 `systemStatus` 确认 `health.status == "UP"` 且 `decompiler_ready == true`
+> **Content-Type**: All responses are `application/json; charset=UTF-8`
+> **CORS**: Globally enabled (`Access-Control-Allow-Origin: *`)
+> **Architecture**: 4 routes, 17 actions, 5-layer analysis pipeline
+> **Agent first action**: Call `/system?action=status` to verify readiness
 
 ---
 
-## 统一错误响应格式
-
-所有错误响应均返回以下 JSON 结构，Agent 可通过检测 `"source":"jadx-plugin"` 字段确认错误来自插件（而非网络或其他服务），避免无意义重试：
+## Unified Error Response
 
 ```json
 {
-  "error": "错误描述信息",
+  "error": "Error description",
   "source": "jadx-plugin"
 }
 ```
 
-| HTTP 状态码 | 含义 | Agent 应对策略 |
+| HTTP Status | Meaning | Agent Strategy |
 |---|---|---|
-| `400` | 参数缺失或无效 | 检查请求参数，不要重试 |
-| `404` | 目标类/方法/字段/资源不存在 | 换一个名称或确认目标是否存在，不要重试同一请求 |
-| `405` | HTTP 方法不允许 | 换用正确的 HTTP 方法（通常为 GET） |
-| `500` | 服务器内部错误 | 可尝试调用 `clearCache` 后重试一次，仍失败则上报 |
-| `503` | 服务不可用/反编译器未就绪 | 等待片刻后调用 `systemStatus` 检查状态 |
+| `400` | Invalid/missing params | Fix params, do not retry |
+| `404` | Target not found | Try another name, do not retry same request |
+| `500` | Internal error | Call `clearCache` then retry once |
+| `503` | Layer not ready | Wait, then call `status` to check readiness |
+
+### Layer-Building Response (202)
+
+When an action requires a layer that is still building:
+
+```json
+{
+  "status": "building",
+  "layer": 1,
+  "progress": 65,
+  "message": "Index is being built. Retry in a few seconds."
+}
+```
 
 ---
 
-## 1. 系统管理 — `/systemManager?action=xxx`
+## Analysis Layer Pipeline
 
-### 1.1 `systemStatus` — 获取系统状态 ★ 首先调用
+The plugin runs a background pipeline after startup. Actions have layer dependencies — if the required layer isn't ready, you get a 202 response.
 
-```
-GET /systemManager?action=systemStatus
-```
-
-**参数**: 无
-
-**成功响应** (200 / 503):
-```json
-{
-  "health": {
-    "status": "UP",
-    "decompiler_ready": true,
-    "uptime_ms": 123456
-  },
-  "config": {
-    "port": 13997,
-    "cors_enabled": true,
-    "version": "0.1.9-Agent-Core"
-  },
-  "resources": {
-    "memory": {
-      "max_mb": 4096,
-      "used_mb": 1200,
-      "free_mb": 800,
-      "usage_percent": "29.30%"
-    }
-  },
-  "available_apis": [
-    {"path": "/codeInsight", "actions": ["getAllClasses", "getClassCode", "getClassStructure", "getClassSmali"]},
-    {"path": "/resourceExplorer", "actions": ["getMainActivity", "getMainAppClasses", "getAllResourceNames", "getResourceFile"]},
-    {"path": "/searchEngine", "actions": ["searchMethod", "searchClass", "searchString", "scanCrypto"]},
-    {"path": "/getXrefs", "params": ["class", "method?", "field?", "offset?", "limit?"]},
-    {"path": "/refactor", "actions": ["renameClass", "renameMethod", "renameField", "renameVariable", "exportMapping"]},
-    {"path": "/systemManager", "actions": ["systemStatus", "clearCache", "taskStatus", "getApkOverview"]}
-  ],
-  "timestamp": 1713260000000
-}
-```
-
-**关键判断**:
-- `health.status == "UP"` 且 `health.decompiler_ready == true` → 可以开始工作
-- `resources.memory.usage_percent > 85%` → 建议先调用 `clearCache`
-
----
-
-### 1.2 `clearCache` — 清空缓存
-
-```
-GET /systemManager?action=clearCache
-```
-
-**参数**: 无
-
-**成功响应** (200):
-```json
-{
-  "status": "success",
-  "message": "All caches (code and resources) cleared successfully."
-}
-```
-
-**使用时机**: 大量 rename 操作后代码未更新、内存占用过高、服务端频繁报错时。
-
----
-
-### 1.3 `taskStatus` — 查询异步任务状态
-
-```
-GET /systemManager?action=taskStatus&task_id=<task_id>
-```
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `task_id` | 是 | 由 `searchString` 或 `scanCrypto` 返回的任务 ID |
-
-**成功响应** (200):
-
-任务运行中:
-```json
-{
-  "task_id": "a1b2c3d4",
-  "type": "STRING_SEARCH",
-  "status": "RUNNING",
-  "timestamp": 1713260000000
-}
-```
-
-任务成功:
-```json
-{
-  "task_id": "a1b2c3d4",
-  "type": "STRING_SEARCH",
-  "status": "SUCCESS",
-  "timestamp": 1713260005000,
-  "result": ["com.example.MainActivity", "com.example.Utils"]
-}
-```
-
-任务失败:
-```json
-{
-  "task_id": "a1b2c3d4",
-  "type": "STRING_SEARCH",
-  "status": "FAILED",
-  "timestamp": 1713260005000,
-  "error": "Decompiler not available"
-}
-```
-
-**轮询策略**: 每 2-3 秒查询一次，`status` 变为 `SUCCESS` 或 `FAILED` 时停止。任务 30 分钟后自动过期。
-
----
-
-### 1.4 `getApkOverview` — 获取 APK 全貌 ★ 分析前调用
-
-```
-GET /systemManager?action=getApkOverview
-```
-
-**参数**: 无
-
-**成功响应** (200):
-```json
-{
-  "package_name": "com.example.app",
-  "total_classes": 1234,
-  "total_methods": 5678,
-  "total_resources": 89,
-  "components": {
-    "activities": ["com.example.MainActivity", "com.example.SettingsActivity"],
-    "services": ["com.example.MyService"],
-    "receivers": ["com.example.BootReceiver"],
-    "providers": ["com.example.DataProvider"]
-  },
-  "permissions": ["android.permission.INTERNET", "android.permission.READ_PHONE_STATE"],
-  "min_sdk": 21,
-  "target_sdk": 34
-}
-```
-
-> 注: `min_sdk` 和 `target_sdk` 仅在 Manifest 中存在对应属性时返回。
-
----
-
-## 2. 代码洞察 — `/codeInsight?action=xxx`
-
-### 2.1 `getAllClasses` — 获取所有类列表（分页）
-
-```
-GET /codeInsight?action=getAllClasses&keyword=<可选>&offset=<可选>&limit=<可选>
-```
-
-| 参数 | 必填 | 默认值 | 说明 |
+| Layer | Name | Content | Build Time |
 |---|---|---|---|
-| `keyword` | 否 | - | 类名模糊过滤（大小写不敏感） |
-| `offset` | 否 | 0 | 分页起始偏移量 |
-| `limit` | 否 | 50 | 每页条数（最大 500） |
+| 0 | Manifest | AndroidManifest parsing + EntryPoints | <1s |
+| 1 | CodeIndex | Decompiled code index + StringConstantIndex + Library ID | 10-60s |
+| 2 | CallGraph | Call edges + SecurityAnnotator + ApiEndpoints + DI + Architecture | +0s (piggybacked on L1) |
+| 3 | RuleEngine | YAML security rule scan | <2s (after L1+2) |
+| 4 | SSATaint | On-demand SSA taint analysis | Per-request |
 
-**成功响应** (200):
+---
+
+## Route 1: `/code` — Code Retrieval
+
+### 1.1 `getClass` — Get full class data
+
+```
+GET /code?action=getClass&name=<class_name>
+```
+
+| Param | Required | Description |
+|---|---|---|
+| `name` | Yes | Full class name, e.g. `com.example.MyActivity` |
+
+**Layer Dependency**: 0 (enriched with security data if L2+ ready)
+
+**Response** (200):
 ```json
 {
-  "type": "class-list",
-  "classes": [
-    "com.example.app.MainActivity",
-    "com.example.app.Utils",
-    "com.example.app.network.ApiClient"
-  ],
-  "pagination": {
-    "total": 1234,
-    "offset": 0,
-    "limit": 50,
-    "count": 50,
-    "has_more": true,
-    "next_offset": 50
+  "class_name": "com.example.MyActivity",
+  "super_class": "android.app.Activity",
+  "implements": ["android.view.View$OnClickListener"],
+  "structure": {
+    "fields": [
+      {"name": "TAG", "type": "java.lang.String"}
+    ],
+    "methods": [
+      {
+        "name": "onCreate",
+        "signature": "onCreate(Landroid/os/Bundle;)V",
+        "access": "public",
+        "security_tags": {
+          "is_sink": true,
+          "sink_categories": ["webview"],
+          "rule_findings": [{"rule_id": "WEBVIEW_LOADURL", "severity": "high"}]
+        }
+      }
+    ]
+  },
+  "methods": [...],
+  "fields": [...],
+  "code": "package com.example;\n\npublic class MyActivity extends Activity {\n    ...\n}",
+  "class_security_summary": {
+    "total_sinks": 3,
+    "total_sources": 1,
+    "sink_categories": ["webview", "log"],
+    "source_categories": ["intent"],
+    "rule_findings_count": 2,
+    "highest_severity": "high"
   }
 }
 ```
 
-**分页翻页**: 当 `has_more == true` 时，使用 `next_offset` 作为下一次请求的 `offset` 参数。
+**Key fields for Go agent**:
+- `class_name`: Canonical name
+- `structure.methods[].security_tags`: Per-method sink/source/rule annotations
+- `code`: Full decompiled source
+- `class_security_summary`: Aggregated security posture
 
 ---
 
-### 2.2 `getClassCode` — 获取类/方法的反编译 Java 代码
+### 1.2 `getMethod` — Get single method with taint info
 
 ```
-GET /codeInsight?action=getClassCode&code_name=<类名或方法名>
+GET /code?action=getMethod&class=<class_name>&method=<method_name>
 ```
 
-| 参数 | 必填 | 说明 |
+| Param | Required | Description |
 |---|---|---|
-| `code_name` | 是 | 支持三种格式（按优先级匹配）: |
+| `class` | Yes | Full class name |
+| `method` | Yes | Method name or shortId signature |
 
-**`code_name` 支持的三种输入格式**:
+**Layer Dependency**: 0 (enriched with L2 callers + L4 taint if ready)
 
-1. **精确方法签名**: `com.example.Utils.encrypt(Ljava/lang/String;)V` → 返回该方法代码
-2. **类名.方法名**: `com.example.Utils.encrypt` → 返回该方法代码
-3. **完整类名**: `com.example.Utils` → 返回整个类代码
-
-**成功响应 — 类代码** (200):
+**Response** (200):
 ```json
 {
-  "type": "class",
-  "class_name": "com.example.app.Utils",
-  "code": "package com.example.app;\n\npublic class Utils {\n    ...\n}"
+  "class_name": "com.example.Utils",
+  "method_name": "encrypt",
+  "method_signature": "encrypt(Ljava/lang/String;)Ljava/lang/String;",
+  "signature": "encrypt(Ljava/lang/String;)Ljava/lang/String;",
+  "code": "public String encrypt(String input) {\n    ...\n}",
+  "security_tags": {
+    "is_sink": true,
+    "sink_categories": ["crypto"],
+    "has_tainted_params": true,
+    "taint_summary": "参数 [0] 可能来自外部输入; 2 条污点路径"
+  },
+  "callers": [
+    {"class_name": "com.example.LoginActivity", "method_name": "doLogin", "method_signature": "doLogin"}
+  ],
+  "caller_count": 1
 }
 ```
 
-**成功响应 — 方法代码** (200):
-```json
-{
-  "type": "method",
-  "method_name": "com.example.app.Utils.encrypt",
-  "code": "public String encrypt(String input) {\n    ...\n}"
-}
-```
+**Key fields for Go agent**:
+- `security_tags.has_tainted_params`: Whether method receives tainted input
+- `security_tags.taint_summary`: Human-readable taint description
+- `callers`: Who calls this method (from CallGraph)
+- `code`: Decompiled method body
 
 ---
 
-### 2.3 `getClassStructure` — 获取类结构概览（字段、方法列表、继承关系）
+### 1.3 `batchGetClass` — Batch class structure (no code body)
 
 ```
-GET /codeInsight?action=getClassStructure&class_name=<完整类名>
+GET /code?action=batchGetClass&names=<comma_separated_names>
 ```
 
-| 参数 | 必填 | 说明 |
+| Param | Required | Description |
 |---|---|---|
-| `class_name` | 是 | 完整类名，如 `com.example.app.Utils` |
+| `names` | Yes | Comma-separated class names, **max 5** |
 
-**成功响应** (200):
+**Response** (200):
 ```json
 {
-  "class_name": "com.example.app.Utils",
-  "super_class": "java.lang.Object",
-  "implements": ["java.io.Serializable"],
-  "fields": ["java.lang.String TAG", "int MAX_RETRY"],
-  "methods": ["<init>()V", "encrypt(Ljava/lang/String;)Ljava/lang/String;", "decrypt(Ljava/lang/String;)Ljava/lang/String;"]
+  "type": "batch-class-structure",
+  "results": [
+    {
+      "class_name": "com.example.A",
+      "methods": [{"name": "foo", "access": "public", "security_tags": {...}}],
+      "method_count": 5,
+      "field_count": 2,
+      "class_security_summary": {...}
+    },
+    {
+      "class_name": "com.example.B",
+      "error": "not found"
+    }
+  ],
+  "count": 2
 }
 ```
 
-> `methods` 数组中的每一项是方法的 shortId 签名格式（方法名+参数类型+返回类型），可直接用于 `getClassCode` 的精确方法查询。
+> Note: `batchGetClass` returns structure only (no `code` field) to prevent token explosion.
 
 ---
 
-### 2.4 `getClassSmali` — 获取类的 Smali 字节码
+## Route 2: `/search` — Search & Scan
+
+### 2.1 `find` — Universal search
 
 ```
-GET /codeInsight?action=getClassSmali&class_name=<完整类名>
+GET /search?action=find&query=<search_term>&scope=<scope>&offset=<n>&limit=<n>
 ```
 
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `class_name` | 是 | 完整类名 |
-
-**成功响应** (200):
-```json
-{
-  "type": "smali",
-  "class_name": "com.example.app.Utils",
-  "code": ".class public Lcom/example/app/Utils;\n.super Ljava/lang/Object;\n..."
-}
-```
-
----
-
-## 3. 资源浏览 — `/resourceExplorer?action=xxx`
-
-### 3.1 `getMainActivity` — 获取主 Activity 代码
-
-```
-GET /resourceExplorer?action=getMainActivity
-```
-
-**参数**: 无
-
-**成功响应** (200):
-```json
-{
-  "type": "main_activity",
-  "class_name": "com.example.app.MainActivity",
-  "code": "package com.example.app;\n\npublic class MainActivity extends AppCompatActivity {\n    ...\n}"
-}
-```
-
----
-
-### 3.2 `getMainAppClasses` — 获取主包下所有类（分页）
-
-```
-GET /resourceExplorer?action=getMainAppClasses&offset=<可选>&limit=<可选>
-```
-
-| 参数 | 必填 | 默认值 | 说明 |
+| Param | Required | Default | Description |
 |---|---|---|---|
-| `offset` | 否 | 0 | 分页偏移 |
-| `limit` | 否 | 100 | 每页条数 |
+| `query` | Yes | - | Search keyword |
+| `scope` | No | `auto` | One of: `auto`, `class`, `method`, `code`, `string`, `url`, `secret`, `endpoint` |
+| `offset` | No | 0 | Pagination offset |
+| `limit` | No | 50 | Results per page |
 
-**成功响应** (200):
+**Layer Dependency**: 1
+
+**Scope behavior**:
+| Scope | Strategy | What it searches |
+|---|---|---|
+| `auto` | Cascade: class→method→code | First non-empty result wins |
+| `class` | Class name match | Case-insensitive substring on class names |
+| `method` | Method declaration match | Regex-based method name search |
+| `code` | Source code content | Full-text substring search in decompiled code |
+| `string` | StringConstantIndex | Inverted index of string literals |
+| `url` | URL extraction | Finds `http://` / `https://` strings |
+| `secret` | Secret detection | Finds high-entropy base64-like strings (16+ chars) |
+| `endpoint` | API endpoint | Finds Retrofit annotations `@GET/@POST/...` |
+
+**Response** (200):
 ```json
 {
-  "package": "com.example.app",
-  "total": 456,
+  "type": "search-results",
+  "query": "encrypt",
+  "scope": "auto",
+  "strategy": "method_name",
+  "results": [
+    {
+      "class_name": "com.example.CryptoUtils",
+      "match_type": "method_name",
+      "is_third_party": false,
+      "security_summary": {...}
+    }
+  ],
+  "total": 3,
   "offset": 0,
-  "limit": 100,
-  "has_more": true,
-  "classes": [
-    "com.example.app.MainActivity",
-    "com.example.app.Utils",
-    "com.example.app.network.ApiClient"
+  "limit": 50,
+  "has_more": false
+}
+```
+
+**Special scope results**:
+
+`scope=url`:
+```json
+{"class_name": "...", "match_type": "url", "urls": ["https://api.example.com/v1/users"]}
+```
+
+`scope=secret`:
+```json
+{"class_name": "...", "match_type": "possible_secret", "values": ["aGVsbG8gd29ybGQ..."]}
+```
+
+`scope=endpoint`:
+```json
+{"class_name": "...", "match_type": "api_endpoint", "endpoints": [{"method": "POST", "path": "/api/login"}]}
+```
+
+---
+
+### 2.2 `scan` — Security rule scan results
+
+```
+GET /search?action=scan&category=<cat>&severity=<sev>&limit=<n>
+```
+
+| Param | Required | Default | Description |
+|---|---|---|---|
+| `category` | No | `all` | Filter: `crypto`, `ssl_tls`, `webview`, `ipc_security`, `dynamic_code`, `data_storage`, `data_leak`, `logging`, `network`, `hardcoded_secrets`, `root_detection`, or `all` |
+| `severity` | No | `info` | Minimum severity: `info`, `medium`, `high`, `critical` |
+| `limit` | No | 100 | Max findings returned |
+
+**Layer Dependency**: 3
+
+**Response** (200):
+```json
+{
+  "type": "security-scan",
+  "category": "all",
+  "min_severity": "high",
+  "summary": {
+    "total_findings": 42,
+    "critical": 2,
+    "high": 8,
+    "medium": 20,
+    "info": 12,
+    "rules_loaded": 55,
+    "by_category": {"crypto": 5, "webview": 3, "data_leak": 10, ...}
+  },
+  "findings": [
+    {
+      "rule_id": "WEAK_CRYPTO_AES_ECB",
+      "severity": "high",
+      "category": "crypto",
+      "class_name": "com.example.CryptoUtils",
+      "line_number": 42,
+      "description": "AES/ECB mode detected - vulnerable to pattern analysis",
+      "context": ["41:     Cipher c = Cipher.getInstance(", "42: >>> \"AES/ECB/PKCS5Padding\"", "43:     );"],
+      "tags": ["owasp-m5", "cwe-327"],
+      "match_type": "method_invoke",
+      "confidence": "high",
+      "remediation": "Use AES/GCM/NoPadding instead"
+    }
+  ],
+  "total_findings": 10
+}
+```
+
+---
+
+### 2.3 `findSinkSource` — Sink/Source enumeration
+
+```
+GET /search?action=findSinkSource&type=<type>&category=<cat>
+```
+
+| Param | Required | Default | Description |
+|---|---|---|---|
+| `type` | No | `both` | `sink`, `source`, or `both` |
+| `category` | No | all | Filter by sink/source category: `crypto`, `webview`, `exec`, `sql`, `file`, `intent`, `network`, `log`, `deeplink`, etc. |
+
+**Layer Dependency**: 2
+
+**Response** (200):
+```json
+{
+  "type": "sink-source-list",
+  "filter_type": "both",
+  "filter_category": null,
+  "results": [
+    {
+      "method_key": "com.example.Utils#loadUrl",
+      "class_name": "com.example.Utils",
+      "method_name": "loadUrl",
+      "type": "sink",
+      "category": "webview",
+      "caller_count": 3,
+      "is_reachable_from_entry": true
+    }
+  ],
+  "total": 15,
+  "sinks_total": 42,
+  "sources_total": 18
+}
+```
+
+---
+
+## Route 3: `/analyze` — Deep Analysis
+
+### 3.1 `component` — Single component deep analysis
+
+```
+GET /analyze?action=component&name=<class_name>
+```
+
+| Param | Required | Description |
+|---|---|---|
+| `name` | Yes | Full class name of the Android component |
+
+**Layer Dependency**: 0 (enriched with L2/L3 if ready)
+
+**Response** (200):
+```json
+{
+  "component_name": "com.example.DeepLinkActivity",
+  "type": "activity",
+  "manifest": {
+    "exported": true,
+    "has_permission": false,
+    "intent_filters": [
+      {"actions": ["android.intent.action.VIEW"], "categories": ["android.intent.category.DEFAULT"], "data": [{"scheme": "myapp", "host": "open"}]}
+    ],
+    "security_note": "exported 且无 permission 保护，接受 deep link 输入"
+  },
+  "structure": {
+    "super_class": "android.app.Activity",
+    "implements": [],
+    "methods": [
+      {"name": "onCreate", "signature": "onCreate(Landroid/os/Bundle;)V", "security_tags": {...}}
+    ],
+    "fields": [...]
+  },
+  "code": "package com.example;\n...",
+  "class_security_summary": {
+    "total_sinks": 2,
+    "sink_categories": ["webview"],
+    "source_categories": ["deeplink", "intent"],
+    "key_finding": "Deep link 输入直接流入 WebView.loadUrl(), 无过滤"
+  }
+}
+```
+
+---
+
+### 3.2 `callChain` — Call chain tracing
+
+```
+GET /analyze?action=callChain&class=<class>&method=<method>&direction=<dir>&depth=<n>
+```
+
+| Param | Required | Default | Description |
+|---|---|---|---|
+| `class` | Yes | - | Full class name |
+| `method` | Yes | - | Method name |
+| `direction` | No | `up` | `up` (who calls me) or `down` (who I call). `callers` is alias for `up` |
+| `depth` | No | 3 | Max trace depth (capped at 6) |
+
+**Layer Dependency**: 2
+
+**Response** (200):
+```json
+{
+  "target": "com.example.Utils#encrypt",
+  "direction": "up",
+  "depth": 3,
+  "chain": [
+    {
+      "depth": 1,
+      "methods": [
+        {"class": "com.example.LoginVM", "method": "doLogin"}
+      ]
+    },
+    {
+      "depth": 2,
+      "methods": [
+        {"class": "com.example.LoginActivity", "method": "onSubmit"}
+      ]
+    }
+  ],
+  "chain_tree": {
+    "method": "com.example.Utils#encrypt",
+    "children": [
+      {
+        "method": "com.example.LoginVM#doLogin",
+        "children": [
+          {"method": "com.example.LoginActivity#onSubmit", "children": [], "is_entry_point": true}
+        ]
+      }
+    ]
+  },
+  "paths_to_entry": 1,
+  "total_paths": 2,
+  "total_nodes": 3
+}
+```
+
+**Key fields for Go agent**:
+- `chain`: Flat layer format, easy to iterate
+- `chain_tree`: Nested tree format for LLM readability
+- `paths_to_entry`: How many paths reach an Android entry point (exported component lifecycle)
+
+---
+
+### 3.3 `dataFlow` — SSA taint analysis
+
+```
+GET /analyze?action=dataFlow&class=<class>&method=<method>&depth_mode=<mode>
+```
+
+| Param | Required | Default | Description |
+|---|---|---|---|
+| `class` | Yes | - | Full class name |
+| `method` | Yes | - | Method name |
+| `depth_mode` | No | `shallow` | `shallow` (intra-method) or `deep` (follows callees 1 level) |
+
+**Layer Dependency**: 2 (Layer 4 is triggered on-demand)
+
+**Response** (200):
+```json
+{
+  "class_name": "com.example.Utils",
+  "method_name": "processInput",
+  "depth_mode": "shallow",
+  "tainted_params": [0],
+  "flows": [
+    {
+      "source": {"type": "param", "index": 0, "name": "input"},
+      "sink": {"type": "invoke", "target": "android.webkit.WebView#loadUrl", "category": "webview"},
+      "path": ["param[0]", "v2 = input.toString()", "webView.loadUrl(v2)"],
+      "risk": "high"
+    }
+  ],
+  "summary": {
+    "total_flows": 1,
+    "high_risk_flows": 1,
+    "sink_categories": ["webview"],
+    "recommendation": "Validate and sanitize input before passing to WebView"
+  }
+}
+```
+
+---
+
+### 3.4 `entryPoints` — Entry point aggregation
+
+```
+GET /analyze?action=entryPoints&filter=<filter>
+```
+
+| Param | Required | Default | Description |
+|---|---|---|---|
+| `filter` | No | `all` | `all`, `activity`, `service`, `receiver`, `provider`, `deeplink` |
+
+**Layer Dependency**: 0 (enriched with L2 if ready)
+
+**Response** (200):
+```json
+{
+  "type": "entry-points",
+  "filter": "all",
+  "entries": [
+    {
+      "class_name": "com.example.DeepLinkActivity",
+      "name": "com.example.DeepLinkActivity",
+      "component_type": "activity",
+      "type": "activity",
+      "exported": true,
+      "has_permission": false,
+      "has_intent_filter": true,
+      "deep_links": [{"scheme": "myapp", "host": "open", "path": "/target"}],
+      "contains_sinks": ["webview"],
+      "source_categories": ["deeplink", "intent"],
+      "risk_level": "critical"
+    }
+  ],
+  "summary": {
+    "total_entries": 12,
+    "unprotected": 5,
+    "with_deeplinks": 3,
+    "highest_risk": "critical"
+  }
+}
+```
+
+**Risk level computation**:
+- `critical`: Provider without permission, OR exec/sql sinks, OR deeplink→webview
+- `high`: Unprotected component with sink calls
+- `medium`: Unprotected without known sinks
+- `low`: Protected with permission
+
+---
+
+### 3.5 `attackSurface` — Full attack surface overview
+
+```
+GET /analyze?action=attackSurface
+```
+
+**Layer Dependency**: 2 (L3 optional, enriches rule_scan_summary)
+
+**Response** (200):
+```json
+{
+  "type": "attack-surface",
+  "entry_points": {
+    "total": 12,
+    "unprotected": 5,
+    "by_type": {"activity": 6, "service": 3, "receiver": 2, "provider": 1},
+    "deep_links": ["myapp://open", "https://example.com"],
+    "top_risk": [
+      {"name": "DeepLinkActivity", "risk": "critical", "reason": "deep link → webview, no filter"},
+      {"name": "DataProvider", "risk": "critical", "reason": "exported provider, no permission"}
+    ]
+  },
+  "api_endpoints": {
+    "total": 15,
+    "by_method": {"GET": 8, "POST": 5, "PUT": 2},
+    "base_urls": ["https://api.example.com/v1"],
+    "auth_required_count": 12
+  },
+  "auth_mechanisms": {
+    "interceptor_classes": ["com.example.AuthInterceptor"],
+    "token_type": "Bearer",
+    "storage_method": "SharedPreferences"
+  },
+  "sink_distribution": {
+    "categories": {
+      "crypto": {"count": 8, "classes": 3, "highest_severity": "high"},
+      "webview": {"count": 4, "classes": 2, "highest_severity": "critical"},
+      "exec": {"count": 0},
+      "sql": {"count": 2, "classes": 1, "highest_severity": "medium"},
+      "file": {"count": 5, "classes": 3, "highest_severity": "medium"},
+      "network": {"count": 12, "classes": 6, "highest_severity": "low"},
+      "log": {"count": 20, "classes": 10, "highest_severity": "info"}
+    }
+  },
+  "app_architecture": {
+    "primary_pattern": "MVVM",
+    "confidence": 0.85,
+    "di_framework": "Hilt",
+    "network_library": "Retrofit+OkHttp"
+  },
+  "rule_scan_summary": {
+    "total_findings": 42,
+    "critical": 2,
+    "high": 8,
+    "medium": 20,
+    "info": 12,
+    "rules_loaded": 55,
+    "by_category": {...},
+    "top_findings": [...]
+  },
+  "suggested_analysis_priorities": [
+    "1. DeepLinkActivity: deep link → webview, no filter",
+    "2. DataProvider: exported provider, no permission",
+    "3. Command injection analysis (exec sinks found)"
   ]
 }
 ```
 
 ---
 
-### 3.3 `getAllResourceNames` — 获取所有资源文件名（分页）
+### 3.6 `resolveDI` — Dependency Injection resolution
 
 ```
-GET /resourceExplorer?action=getAllResourceNames&keyword=<可选>&offset=<可选>&limit=<可选>
+GET /analyze?action=resolveDI&name=<interface_name>
 ```
 
-| 参数 | 必填 | 默认值 | 说明 |
-|---|---|---|---|
-| `keyword` | 否 | - | 文件名模糊过滤（大小写不敏感） |
-| `offset` | 否 | 0 | 分页偏移 |
-| `limit` | 否 | 50 | 每页条数（最大 500） |
+| Param | Required | Description |
+|---|---|---|
+| `name` | Yes | Interface or abstract class name to resolve |
 
-**成功响应** (200):
+**Layer Dependency**: 2
+
+**Response** (200):
 ```json
 {
-  "type": "application-resources",
-  "files": [
-    "AndroidManifest.xml",
-    "res/layout/activity_main.xml",
-    "res/values/strings.xml"
+  "interface": "com.example.Repository",
+  "implementations": ["com.example.RepositoryImpl", "com.example.MockRepository"],
+  "implementation_count": 2,
+  "binding_details": [
+    {
+      "class": "com.example.RepositoryImpl",
+      "constructor_dependencies": ["com.example.ApiService", "com.example.AppDatabase"]
+    }
   ],
-  "pagination": {
-    "total": 89,
-    "offset": 0,
-    "limit": 50,
-    "count": 50,
-    "has_more": true,
-    "next_offset": 50
-  }
+  "modules": ["com.example.di.AppModule", "com.example.di.NetworkModule"]
 }
 ```
 
 ---
 
-### 3.4 `getResourceFile` — 获取资源文件内容
+## Route 4: `/system` — System Management
+
+### 4.1 `status` — System health & layer status (CALL FIRST)
 
 ```
-GET /resourceExplorer?action=getResourceFile&file_name=<资源文件名>&startLine=<可选>&endLine=<可选>
+GET /system?action=status
 ```
 
-| 参数 | 必填 | 默认值 | 说明 |
-|---|---|---|---|
-| `file_name` | 是 | - | 资源文件名（从 `getAllResourceNames` 获取） |
-| `startLine` | 否 | 1 | 起始行号 |
-| `endLine` | 否 | 99999 | 结束行号 |
+**Layer Dependency**: None
 
-**成功响应** (200):
+**Response** (200):
 ```json
 {
-  "type": "resource/text",
-  "file": {
-    "file_name": "AndroidManifest.xml",
-    "content": "// Lines 1-50/120\n\n<?xml version=\"1.0\"...>"
-  }
+  "health": "UP",
+  "decompiler_ready": true,
+  "memory": {
+    "used_mb": 1200,
+    "max_mb": 4096,
+    "usage_percent": 29
+  },
+  "layers": {
+    "layer_0_manifest": {"state": "READY", "progress": 100},
+    "layer_1_code_index": {"state": "READY", "progress": 100, "classes_indexed": 3456, "strings_indexed": 12000},
+    "layer_2_call_graph": {"state": "READY", "progress": 100, "edges": 8900, "sinks": 42, "sources": 18, "api_endpoints": 15, "di_bindings": 8},
+    "layer_3_rule_engine": {"state": "READY", "progress": 100, "rules_loaded": 55, "findings": 42},
+    "layer_4_ssa_taint": {"state": "ON_DEMAND", "cached_methods": 0}
+  },
+  "app_architecture": {...},
+  "libraries_detected": ["Retrofit", "OkHttp", "Gson", "Hilt", "Glide"],
+  "third_party_classes": 2100,
+  "app_classes": 1356,
+  "uptime_seconds": 120
 }
 ```
 
-> 内容超过 200,000 字符时自动截断并提示，使用 `startLine` / `endLine` 分段读取。
+**Agent readiness check**:
+```
+health == "UP" AND decompiler_ready == true → Ready to work
+layers.layer_0_manifest.state == "READY" → Can call /analyze?action=entryPoints, component
+layers.layer_1_code_index.state == "READY" → Can call /search?action=find, /code?action=getClass
+layers.layer_2_call_graph.state == "READY" → Can call /analyze?action=callChain, dataFlow, attackSurface
+layers.layer_3_rule_engine.state == "READY" → Can call /search?action=scan
+```
 
 ---
 
-## 4. 搜索引擎 — `/searchEngine?action=xxx`
-
-### 4.1 `searchMethod` — 按方法名搜索（同步，分页）
+### 4.2 `overview` — APK overview (cached)
 
 ```
-GET /searchEngine?action=searchMethod&method_name=<方法名>&offset=<可选>&limit=<可选>
+GET /system?action=overview
 ```
 
-| 参数 | 必填 | 默认值 | 说明 |
-|---|---|---|---|
-| `method_name` | 是 | - | 方法名关键词（大小写不敏感，模糊匹配） |
-| `offset` | 否 | 0 | 分页偏移 |
-| `limit` | 否 | 50 | 每页条数（最大 500） |
+**Layer Dependency**: 0
 
-**成功响应** (200):
+**Response** (200):
 ```json
 {
-  "type": "method-search-results",
-  "methods": [
-    "com.example.app.Utils | encrypt(Ljava/lang/String;)Ljava/lang/String;",
-    "com.example.app.CryptoHelper | encryptAES(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"
+  "package_name": "com.example.app",
+  "min_sdk": 21,
+  "target_sdk": 34,
+  "application": {
+    "debuggable": false,
+    "allowBackup": true,
+    "networkSecurityConfig": "network_security_config.xml",
+    "usesCleartextTraffic": false
+  },
+  "components_summary": {
+    "activities": 12,
+    "services": 3,
+    "receivers": 5,
+    "providers": 2,
+    "total": 22,
+    "exported": 5
+  },
+  "permissions": ["android.permission.INTERNET", "android.permission.CAMERA", ...],
+  "security_findings": [
+    {"type": "allowBackup", "severity": "medium", "detail": "allowBackup=true enables data extraction"},
+    {"type": "exported_no_permission", "severity": "high", "detail": "3 components exported without permission"}
   ],
-  "pagination": {
-    "total": 15,
-    "offset": 0,
-    "limit": 50,
-    "count": 15,
-    "has_more": false
-  }
+  "deep_links": [
+    {"scheme": "myapp", "host": "open", "path": "/target"}
+  ],
+  "total_classes": 3456,
+  "total_methods": 18900,
+  "packages": {"com.example": 1200, "androidx": 800, "com.google": 400, ...},
+  "libraries_detected": ["Retrofit", "OkHttp", "Gson", "Hilt"]
 }
 ```
 
-> `methods` 数组格式为 `"完整类名 | 方法签名"`，可拆分出类名和方法签名。
+> Response is cached after first call. Use `clearCache` to invalidate.
 
 ---
 
-### 4.2 `searchClass` — 按类名/代码搜索（分页）
+### 4.3 `rename` — Rename class/method/field/variable
 
 ```
-GET /searchEngine?action=searchClass&class_name=<搜索词>&package=<可选>&search_in=<可选>&offset=<可选>&limit=<可选>
+GET /system?action=rename&type=<type>&target=<target>&new_name=<new_name>
 ```
 
-| 参数 | 必填 | 默认值 | 说明 |
+| Param | Required | Description |
+|---|---|---|
+| `type` | Yes | `class`, `method`, `field`, `variable`, or `export` |
+| `target` | Yes* | See format below (*not needed for `export`) |
+| `new_name` | Yes* | New name (*not needed for `export`) |
+| `reg` | No | Register number (variable disambiguation) |
+| `ssa` | No | SSA version (variable disambiguation) |
+
+**Target format by type**:
+| Type | Target Format | Example |
+|---|---|---|
+| `class` | Full class name | `com.example.p001.a` |
+| `method` | `ClassName#methodName` | `com.example.Utils#a` |
+| `field` | `ClassName#fieldName` | `com.example.Utils#b` |
+| `variable` | `ClassName#methodName#varName` | `com.example.Utils#encrypt#v0` |
+| `export` | (not needed) | - |
+
+**Variable disambiguation**: When multiple SSA variables share the same name, use `reg` and/or `ssa` params:
+- `reg=5` — match by register number only
+- `reg=5&ssa=2` — match by register + SSA version (most precise)
+- Neither — match by variable name (first match)
+
+**Rename response** (200):
+```json
+{
+  "success": true,
+  "type": "variable",
+  "target": "com.example.Utils#encrypt#v0",
+  "new_name": "inputData"
+}
+```
+
+**Export response** (200):
+```json
+{
+  "type": "rename_export",
+  "mappings": {"CryptoUtils": "a", "encrypt": "b", "secretKey": "f0"},
+  "total": 3
+}
+```
+
+> Mappings format: `{"newName": "originalObfuscatedName"}`. Use original names for Frida/Xposed hooks.
+
+---
+
+### 4.4 `clearCache` — Invalidate all caches
+
+```
+GET /system?action=clearCache
+```
+
+**Response** (200):
+```json
+{
+  "success": true,
+  "message": "All caches cleared. Layers will rebuild on next request."
+}
+```
+
+> Clears: CodeIndex, CallGraph, SecurityAnnotator, RuleEngine findings, ManifestAnalyzer cache, overview cache. Layers will auto-rebuild on next dependent request.
+
+---
+
+### 4.5 `reloadRules` — Hot-reload security rules
+
+```
+GET /system?action=reloadRules&path=<optional_rules_dir>
+```
+
+| Param | Required | Description |
+|---|---|---|
+| `path` | No | External rules directory path. If omitted, reloads bundled rules. |
+
+**Response** (200):
+```json
+{
+  "success": true,
+  "rules_loaded": 55,
+  "findings_after_rescan": 42
+}
+```
+
+---
+
+## Agent Recommended Workflow
+
+```
+Phase 1: Initialization
+─────────────────────────────────────────────────────
+1. GET /system?action=status
+   → Verify health=="UP" && decompiler_ready==true
+   → Check layer states for readiness
+   → Note memory usage
+
+2. GET /system?action=overview
+   → Get package_name, permissions, components, architecture
+   → Note security_findings for immediate risks
+   → Identify deep_links for attack surface
+
+Phase 2: Attack Surface Assessment
+─────────────────────────────────────────────────────
+3. GET /analyze?action=attackSurface
+   → Full attack surface with entry_points, api_endpoints, sinks
+   → Use suggested_analysis_priorities to guide next steps
+
+4. GET /analyze?action=entryPoints&filter=all
+   → Prioritize: risk_level==critical first
+   → Note contains_sinks + source_categories
+
+Phase 3: Deep Dive (per priority component)
+─────────────────────────────────────────────────────
+5. GET /analyze?action=component&name=<target>
+   → Get manifest + code + security_summary in one call
+   → Read key_finding for quick assessment
+
+6. GET /analyze?action=callChain&class=<x>&method=<y>&direction=up
+   → Trace who calls the vulnerable method
+   → Check paths_to_entry to see if reachable from exported components
+
+7. GET /analyze?action=dataFlow&class=<x>&method=<y>&depth_mode=deep
+   → SSA taint analysis: does user input reach this sink?
+   → Read flows[].path for the exact data flow
+
+Phase 4: Targeted Searches
+─────────────────────────────────────────────────────
+8. GET /search?action=find&query=encrypt&scope=method
+   → Find crypto-related methods
+
+9. GET /search?action=find&query=api.example.com&scope=url
+   → Find hardcoded URLs
+
+10. GET /search?action=scan&severity=high
+    → Get all high+ severity rule findings
+
+11. GET /search?action=findSinkSource&type=sink&category=exec
+    → Find command execution sinks
+
+Phase 5: Deobfuscation (as needed)
+─────────────────────────────────────────────────────
+12. GET /system?action=rename&type=class&target=com.a.b.c&new_name=CryptoManager
+    → Rename obfuscated classes for readability
+
+13. GET /system?action=rename&type=export
+    → Export mapping before writing Frida scripts
+```
+
+---
+
+## Summary Table
+
+| Route | Action | Layer | Purpose |
 |---|---|---|---|
-| `class_name` | 是 | - | 搜索关键词（大小写不敏感） |
-| `package` | 否 | - | 包名前缀过滤（如 `com.example`） |
-| `search_in` | 否 | `class_name` | 搜索范围，可选: `class_name`, `code`, `class_name,code`（逗号分隔） |
-| `offset` | 否 | 0 | 分页偏移 |
-| `limit` | 否 | 50 | 每页条数（最大 500） |
-
-**行为说明**:
-- `search_in=class_name`（默认）: **同步返回** 200，直接返回结果
-- `search_in=code` 或 `search_in=class_name,code`: **异步返回** 202 + task_id，需轮询获取结果
-
-#### 同步模式（search_in=class_name）
-
-**成功响应** (200):
-```json
-{
-  "type": "class-list",
-  "classes": [
-    "com.example.app.CryptoUtils",
-    "com.example.lib.CryptoHelper"
-  ],
-  "pagination": {
-    "total": 2,
-    "offset": 0,
-    "limit": 50,
-    "count": 2,
-    "has_more": false
-  }
-}
-```
-
-#### 异步模式（search_in 包含 code）
-
-**立即响应** (202):
-```json
-{
-  "status": "ACCEPTED",
-  "task_id": "a1b2c3d4",
-  "message": "Code search started, poll /systemManager?action=taskStatus&task_id=a1b2c3d4"
-}
-```
-
-**轮询策略**: 每 2-3 秒调用 `GET /systemManager?action=taskStatus&task_id=<task_id>`，`status` 变为 `SUCCESS` 时 `result` 字段包含分页结果。
-
----
-
-### 4.3 `searchString` — 全局字符串搜索（异步）
-
-```
-GET /searchEngine?action=searchString&query=<搜索字符串>
-```
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `query` | 是 | 在所有类的反编译代码中搜索的字符串（精确包含匹配） |
-
-**立即响应** (202):
-```json
-{
-  "status": "ACCEPTED",
-  "task_id": "a1b2c3d4",
-  "message": "Search started"
-}
-```
-
-缓存命中时:
-```json
-{
-  "status": "ACCEPTED",
-  "task_id": "e5f6g7h8",
-  "message": "Result from cache"
-}
-```
-
-**后续操作**: 使用返回的 `task_id` 调用 `taskStatus` 轮询结果。`result` 字段为包含该字符串的类名数组:
-```json
-["com.example.app.Config", "com.example.app.ApiClient"]
-```
-
----
-
-### 4.4 `scanCrypto` — 加密/安全特征扫描（异步）
-
-```
-GET /searchEngine?action=scanCrypto
-```
-
-**参数**: 无
-
-**立即响应** (202):
-```json
-{
-  "status": "ACCEPTED",
-  "task_id": "x9y0z1w2"
-}
-```
-
-**后续操作**: 轮询 `taskStatus`，`result` 字段为嫌疑类列表:
-```json
-[
-  {"class": "com.example.app.CryptoUtils", "type": "CRYPTO_SENSITIVE", "hint": "Contains javax.crypto.Cipher"},
-  {"class": "com.example.app.HashHelper", "type": "CRYPTO_SENSITIVE", "hint": "Contains MessageDigest"}
-]
-```
-
-> 扫描特征: `javax.crypto.Cipher`, `SecretKeySpec`, `MessageDigest`, `getEncoded`
-
----
-
-## 5. 交叉引用 — `/getXrefs`
-
-```
-GET /getXrefs?class=<类名>&method=<可选>&field=<可选>&offset=<可选>&limit=<可选>
-```
-
-| 参数 | 必填 | 默认值 | 说明 |
-|---|---|---|---|
-| `class` | 是 | - | 完整类名 |
-| `method` | 否 | - | 方法名（查该方法被谁调用） |
-| `field` | 否 | - | 字段名（查该字段被谁使用） |
-| `offset` | 否 | 0 | 分页偏移 |
-| `limit` | 否 | 50 | 每页条数（最大 500） |
-
-**优先级**: `field` > `method` > 类级别 xref
-
-**成功响应 — 方法交叉引用** (200):
-```json
-{
-  "type": "method-xrefs",
-  "references": [
-    "com.example.app.MainActivity | onCreate(Landroid/os/Bundle;)V",
-    "com.example.app.Utils | init()V"
-  ],
-  "pagination": {
-    "total": 5,
-    "offset": 0,
-    "limit": 50,
-    "count": 5,
-    "has_more": false
-  }
-}
-```
-
-**成功响应 — 类交叉引用** (200):
-```json
-{
-  "type": "class-xrefs",
-  "references": [
-    "com.example.app.MainActivity",
-    "com.example.app.SettingsActivity | loadConfig()V"
-  ],
-  "pagination": {
-    "total": 100,
-    "offset": 0,
-    "limit": 50,
-    "count": 50,
-    "has_more": true,
-    "next_offset": 50
-  }
-}
-```
-
-**溢出保护**: 结果超过 2000 条时截断并附加警告:
-```json
-{
-  "pagination": {
-    "is_overflow": true,
-    "warning": "Result truncated to 2000 entries to prevent OOM."
-  }
-}
-```
-
----
-
-## 6. 重构 / 重命名 — `/refactor?action=xxx`
-
-> **重要**: 所有 rename 操作执行后会自动清空缓存。Rename 改的是 JADX 显示名称，**不改变 APK 实际字节码**。编写 Frida/Xposed 脚本时必须用原始混淆名（通过 `exportMapping` 获取映射关系）。
-
-### 6.1 `renameClass` — 重命名类
-
-```
-GET /refactor?action=renameClass&class_name=<原类名>&new_name=<新短名>
-```
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `class_name` | 是 | 完整原类名，如 `p001.a.b` |
-| `new_name` | 是 | 新的短类名（不含包名），如 `CryptoUtils` |
-
-**成功响应** (200):
-```json
-{
-  "status": "success",
-  "message": "Successfully renamed class",
-  "old_name": "b",
-  "new_name": "CryptoUtils"
-}
-```
-
----
-
-### 6.2 `renameMethod` — 重命名方法
-
-```
-GET /refactor?action=renameMethod&method_name=<完整方法路径>&new_name=<新方法名>
-```
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `method_name` | 是 | 格式: `com.example.MyClass.oldMethodName` 或带签名 `com.example.MyClass.oldMethodName(Ljava/lang/String;)V` |
-| `new_name` | 是 | 新方法名 |
-
-**成功响应** (200):
-```json
-{
-  "status": "success",
-  "message": "Successfully renamed method",
-  "class_name": "com.example.MyClass",
-  "old_method_name": "a",
-  "new_method_name": "encrypt"
-}
-```
-
----
-
-### 6.3 `renameField` — 重命名字段
-
-```
-GET /refactor?action=renameField&class_name=<完整类名>&field_name=<原字段名>&new_name=<新字段名>
-```
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `class_name` | 是 | 完整类名 |
-| `field_name` | 是 | 原字段名 |
-| `new_name` | 是 | 新字段名（也接受参数名 `new_field_name`） |
-
-**成功响应** (200):
-```json
-{
-  "status": "success",
-  "message": "Successfully renamed field",
-  "class_name": "com.example.MyClass",
-  "old_field_name": "a",
-  "new_field_name": "secretKey"
-}
-```
-
----
-
-### 6.4 `renameVariable` — 重命名局部变量
-
-```
-GET /refactor?action=renameVariable&class_name=<类名>&method_name=<方法名>&variable_name=<变量名>&new_name=<新名>&reg=<可选>&ssa=<可选>
-```
-
-| 参数 | 必填 | 说明 |
-|---|---|---|
-| `class_name` | 是 | 完整类名 |
-| `method_name` | 是 | 方法名（支持带签名格式） |
-| `variable_name` | 是 | 原变量名 |
-| `new_name` | 是 | 新变量名 |
-| `reg` | 否 | 寄存器编号（消歧义用） |
-| `ssa` | 否 | SSA 版本号（消歧义用） |
-
-**成功响应** (200):
-```json
-{
-  "status": "success",
-  "message": "Successfully renamed local variable",
-  "class_name": "com.example.MyClass",
-  "method_name": "encrypt",
-  "old_variable_name": "v0",
-  "new_variable_name": "inputData"
-}
-```
-
----
-
-### 6.5 `exportMapping` — 导出重命名映射表 ★ 写 Frida 脚本前必调
-
-```
-GET /refactor?action=exportMapping
-```
-
-**参数**: 无
-
-**成功响应** (200):
-```json
-{
-  "CryptoUtils": "b",
-  "encrypt": "a",
-  "secretKey": "f"
-}
-```
-
-> 格式: `{"新名称": "原始混淆名"}` — 编写 `Java.use()` 时用 value（原始名）。
-
----
-
-## 7. 分页规则（通用）
-
-所有返回分页数据的接口共享以下规则:
-
-| 约束 | 值 | 说明 |
-|---|---|---|
-| 默认 `limit` | 50 | 不传 limit 时的默认值 |
-| 最大 `limit` | 500 | 超过 500 会被截断到 500，保护 Agent 上下文窗口 |
-| `offset` 上限 | 1,000,000 | 防止异常偏移 |
-
-**分页响应结构**:
-```json
-{
-  "pagination": {
-    "total": 1234,
-    "offset": 0,
-    "limit": 50,
-    "count": 50,
-    "has_more": true,
-    "next_offset": 50
-  }
-}
-```
-
-**翻页方式**: `has_more == true` → 下次请求 `offset=next_offset`
-
----
-
-## 8. Agent 推荐工作流
-
-```
-1. GET /systemManager?action=systemStatus
-   → 确认 health.status=="UP" && decompiler_ready==true
-   → 记录 available_apis 了解可用能力
-
-2. GET /systemManager?action=getApkOverview
-   → 获取包名、类数量、组件列表、权限，制定分析策略
-
-3. GET /resourceExplorer?action=getMainActivity
-   → 从入口 Activity 开始分析
-
-4. GET /codeInsight?action=getClassCode&code_name=<目标类>
-   → 逐步深入阅读关键类代码
-
-5. GET /codeInsight?action=getClassStructure&class_name=<类名>
-   → 快速了解类的字段、方法、继承关系
-
-6. GET /searchEngine?action=searchMethod&method_name=encrypt
-   → 搜索加密相关方法
-
-7. GET /searchEngine?action=scanCrypto
-   → 异步扫描加密特征
-   → GET /systemManager?action=taskStatus&task_id=<id> 轮询结果
-
-8. GET /getXrefs?class=<类名>&method=<方法名>
-   → 追踪方法被哪些位置调用
-
-9. GET /refactor?action=renameClass&class_name=p001.a.b&new_name=CryptoUtils
-   → 重命名混淆类，提高可读性
-
-10. GET /refactor?action=exportMapping
-    → 导出映射表，确保 Frida 脚本使用原始混淆名
-```
+| `/code` | `getClass` | 0+ | Full class: structure + code + security |
+| `/code` | `getMethod` | 0+ | Single method: code + taint + callers |
+| `/code` | `batchGetClass` | 0+ | Batch structure (no code body) |
+| `/search` | `find` | 1 | Universal search (8 scopes) |
+| `/search` | `scan` | 3 | Security rule findings |
+| `/search` | `findSinkSource` | 2 | Enumerate sinks and sources |
+| `/analyze` | `component` | 0+ | Deep single-component analysis |
+| `/analyze` | `callChain` | 2 | Call graph traversal (up/down) |
+| `/analyze` | `dataFlow` | 2 | SSA taint analysis |
+| `/analyze` | `entryPoints` | 0+ | Exported component listing |
+| `/analyze` | `attackSurface` | 2+ | Full attack surface overview |
+| `/analyze` | `resolveDI` | 2 | DI binding resolution |
+| `/system` | `status` | - | Health + layer status |
+| `/system` | `overview` | 0 | APK metadata overview |
+| `/system` | `rename` | 0 | Rename/export mappings |
+| `/system` | `clearCache` | - | Invalidate all caches |
+| `/system` | `reloadRules` | - | Hot-reload YAML rules |

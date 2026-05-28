@@ -1,0 +1,30 @@
+version: "1.0"
+category: "network"
+
+rules:
+  - id: cleartext_http
+    severity: high
+    name: "明文 HTTP 通信"
+    description: "使用 HTTP 而非 HTTPS 传输数据，可被中间人窃听"
+    match:
+      type: string_contains
+      value: "\"http://"
+    tags: ["cwe-319"]
+
+  - id: network_security_config_missing
+    severity: medium
+    name: "缺少网络安全配置"
+    description: "未使用 network_security_config.xml 限制信任的 CA"
+    match:
+      type: string_contains
+      value: "usesCleartextTraffic"
+    tags: ["cwe-295"]
+
+  - id: custom_ssl_socket_factory
+    severity: high
+    name: "自定义 SSLSocketFactory"
+    description: "自定义 SSLSocketFactory 可能绕过证书验证"
+    match:
+      type: class_inherit
+      extends: "javax.net.ssl.SSLSocketFactory"
+    tags: ["cwe-295"]
