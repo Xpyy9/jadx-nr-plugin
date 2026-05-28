@@ -146,9 +146,12 @@ public class SystemHandler extends BaseHandler {
         }
 
         // Code statistics
-        var classes = decompiler.getClassesWithInners();
+        var classes = new java.util.ArrayList<>(decompiler.getClassesWithInners());
         overview.put("total_classes", classes.size());
-        overview.put("total_methods", classes.stream().mapToInt(c -> c.getMethods().size()).sum());
+        overview.put("total_methods", classes.stream().mapToInt(c -> {
+            try { return c.getClassNode().getMethods().size(); }
+            catch (Exception e) { return 0; }
+        }).sum());
 
         // Package summary (top-level packages)
         Map<String, Integer> packageCounts = new TreeMap<>();

@@ -11,7 +11,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
+import java.util.ConcurrentModificationException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class JadxUtil {
@@ -68,7 +70,9 @@ public class JadxUtil {
     public static synchronized Map<String, ResourceFile> getResourceCache(JadxDecompiler decompiler) {
         if (decompiler == null) return new HashMap<>();
         if (resourceCache.isEmpty()) {
-            for (ResourceFile res : decompiler.getResources()) {
+            // Defensive copy to avoid ConcurrentModificationException
+            List<ResourceFile> resources = new java.util.ArrayList<>(decompiler.getResources());
+            for (ResourceFile res : resources) {
                 if (res == null) continue;
                 String orig = res.getOriginalName();
                 String deobf = res.getDeobfName();
@@ -103,8 +107,22 @@ public class JadxUtil {
             if (text != null) return text.getCodeStr();
             return content.toString();
         } catch (Exception e) {
-            LOG.error("Failed to read resource", e);
+            // Check if this is a ConcurrentModificationException (possibly wrapped in JadxException).
+            // If so, propagate it so the pipeline retry logic can handle it.
+            if (isCausedByConcurrentModification(e)) {
+                throw new ConcurrentModificationException("Resource decode race condition: " + e.getMessage(), e);
+            }
+            LOG.error("Failed to read resource: {}", e.getMessage());
             return null;
         }
+    }
+
+    private static boolean isCausedByConcurrentModification(Throwable e) {
+        Throwable current = e;
+        while (current != null) {
+            if (current instanceof ConcurrentModificationException) return true;
+            current = current.getCause();
+        }
+        return false;
     }
 }

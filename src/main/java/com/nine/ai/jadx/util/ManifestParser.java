@@ -19,9 +19,13 @@ public class ManifestParser {
 
 	/**
 	 * 查找 AndroidManifest.xml 资源并返回其文本内容。
+	 * Uses defensive copy of resource list to avoid ConcurrentModificationException
+	 * if JADX is still building its internal structures.
 	 */
 	public static String getManifestXml(JadxDecompiler decompiler) {
-		for (ResourceFile res : decompiler.getResources()) {
+		// Defensive copy: decompiler.getResources() may return a live list
+		List<ResourceFile> resources = new ArrayList<>(decompiler.getResources());
+		for (ResourceFile res : resources) {
 			if ("AndroidManifest.xml".equals(res.getOriginalName())) {
 				return JadxUtil.getResourceContent(res);
 			}

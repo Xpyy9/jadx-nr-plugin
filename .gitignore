@@ -35,6 +35,7 @@ gradle/libs.versions.toml
 *.cfg
 *.orig
 *.jar
+.log
 
 # Docs (keep README/LICENSE tracked)
 API_REFERENCE.md

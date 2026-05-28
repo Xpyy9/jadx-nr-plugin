@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.nine.ai.jadx"
-version = System.getenv("VERSION") ?: "0.1.9"
+version = System.getenv("VERSION") ?: "0.3.9"
 
 repositories {
 	mavenCentral()

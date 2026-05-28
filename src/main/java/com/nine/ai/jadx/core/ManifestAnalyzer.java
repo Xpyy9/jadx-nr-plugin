@@ -54,8 +54,12 @@ public class ManifestAnalyzer {
 
     /**
      * Parse the AndroidManifest.xml from the loaded APK. Called once at Layer 0.
+     * Clears previous state before parsing to support retry semantics.
      */
     public void parse(JadxDecompiler decompiler) {
+        // Clear previous state in case this is a retry
+        clearCache();
+
         String xml = ManifestParser.getManifestXml(decompiler);
         if (xml == null || xml.isBlank()) {
             LOG.warn("AndroidManifest.xml not found or empty");

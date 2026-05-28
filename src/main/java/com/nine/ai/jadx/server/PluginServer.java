@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.ConcurrentModificationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -132,10 +133,10 @@ public class PluginServer {
     private void startAnalysisPipeline() {
         Thread pipeline = new Thread(() -> {
             try {
-                // Wait for decompiler to be ready
-                JadxDecompiler decompiler = waitForDecompiler(30_000);
+                // Wait for decompiler to be ready (including class loading)
+                JadxDecompiler decompiler = waitForDecompiler(120_000);
                 if (decompiler == null) {
-                    LOG.error("Decompiler not available after 30s. Analysis pipeline aborted.");
+                    LOG.error("Decompiler not available after 120s. Analysis pipeline aborted.");
                     return;
                 }
 
@@ -143,7 +144,7 @@ public class PluginServer {
                 LOG.info("Pipeline: Starting Layer 0 (Manifest)...");
                 layers.markBuilding(0);
                 try {
-                    manifestAnalyzer.parse(decompiler);
+                    retryOnConcurrentModification(() -> manifestAnalyzer.parse(decompiler), "Layer 0 (Manifest)");
                     entryPointCollector.collect(manifestAnalyzer);
                     layers.markReady(0);
                     LOG.info("Pipeline: Layer 0 complete (package={}, components={}, exported={}, entry_points={})",
@@ -159,7 +160,7 @@ public class PluginServer {
                 // Layer 1+2: Code Index + CallGraph + SecurityAnnotator (10-60s)
                 LOG.info("Pipeline: Starting Layer 1+2 (CodeIndex + CallGraph)...");
                 try {
-                    codeIndex.buildIndex(decompiler, layers);
+                    retryOnConcurrentModification(() -> codeIndex.buildIndex(decompiler, layers), "Layer 1+2 (CodeIndex)");
                     // Register entry points in CallGraph for reachability analysis
                     entryPointCollector.registerInCallGraph(codeIndex.getCallGraph());
                     LOG.info("Pipeline: Layer 1+2 complete");
@@ -201,13 +202,62 @@ public class PluginServer {
     }
 
     /**
-     * Wait for decompiler to become available (it may take time after JADX GUI loads an APK).
+     * Retry a Runnable up to 5 times if it throws ConcurrentModificationException.
+     * JADX may still be mutating internal lists even after getClasses() stabilizes
+     * (e.g., alias cache build triggered lazily). Exponential backoff: 2s, 4s, 8s, 16s, 32s.
+     */
+    private void retryOnConcurrentModification(Runnable task, String label) throws Exception {
+        int maxRetries = 5;
+        long backoffMs = 2000;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                task.run();
+                return; // Success
+            } catch (Exception e) {
+                if (isConcurrentModification(e) && attempt < maxRetries) {
+                    LOG.warn("Pipeline: {} hit ConcurrentModificationException (attempt {}/{}), retrying in {}ms...",
+                            label, attempt, maxRetries, backoffMs);
+                    try {
+                        Thread.sleep(backoffMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw e;
+                    }
+                    backoffMs *= 2;
+                } else {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    /**
+     * Check if the exception (or its cause chain) is a ConcurrentModificationException.
+     */
+    private boolean isConcurrentModification(Throwable e) {
+        Throwable current = e;
+        while (current != null) {
+            if (current instanceof ConcurrentModificationException) return true;
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    /**
+     * Wait for decompiler to become available AND for JADX to finish loading classes.
+     * Simply getting a non-null decompiler is not enough — JADX loads classes asynchronously
+     * and accessing getClassesWithInners() or ResourceFile.loadContent() too early causes
+     * ConcurrentModificationException in JADX's internal data structures.
      */
     private JadxDecompiler waitForDecompiler(long timeoutMs) {
         long deadline = System.currentTimeMillis() + timeoutMs;
+
+        // Phase 1: Wait for decompiler object to exist
+        JadxDecompiler decompiler = null;
         while (System.currentTimeMillis() < deadline) {
-            JadxDecompiler d = JadxUtil.getDecompiler(false);
-            if (d != null) return d;
+            decompiler = JadxUtil.getDecompiler(false);
+            if (decompiler != null) break;
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {
@@ -215,7 +265,42 @@ public class PluginServer {
                 return null;
             }
         }
-        return null;
+        if (decompiler == null) return null;
+
+        // Phase 2: Wait for JADX to finish loading classes.
+        // We detect this by polling getClasses() — once the size stabilizes for 2 consecutive
+        // checks (1s apart), JADX has finished loading.
+        LOG.info("Pipeline: Decompiler acquired, waiting for class loading to complete...");
+        int previousSize = -1;
+        int stableCount = 0;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                int currentSize = decompiler.getClasses().size();
+                if (currentSize > 0 && currentSize == previousSize) {
+                    stableCount++;
+                    if (stableCount >= 2) {
+                        LOG.info("Pipeline: Class loading complete ({} classes)", currentSize);
+                        return decompiler;
+                    }
+                } else {
+                    stableCount = 0;
+                }
+                previousSize = currentSize;
+            } catch (Exception e) {
+                // getClasses() may throw during loading — just retry
+                stableCount = 0;
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+
+        // Timeout but decompiler exists — return it anyway, pipeline will retry
+        LOG.warn("Pipeline: Class loading did not stabilize within timeout, proceeding anyway");
+        return decompiler;
     }
 
     public void stop() {

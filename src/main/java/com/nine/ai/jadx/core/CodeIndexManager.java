@@ -2,7 +2,7 @@ package com.nine.ai.jadx.core;
 
 import jadx.api.JadxDecompiler;
 import jadx.api.JavaClass;
-import jadx.api.JavaMethod;
+import jadx.core.dex.nodes.ClassNode;
 import jadx.core.dex.nodes.MethodNode;
 import jadx.core.dex.instructions.InvokeNode;
 import jadx.core.dex.nodes.InsnNode;
@@ -131,11 +131,26 @@ public class CodeIndexManager {
                 return codeIndex;
             }
 
+            // Clear any partial state from a previous failed attempt
+            if (codeIndex != null) codeIndex.clear();
+            thirdPartyClasses.clear();
+            libraryMapping.clear();
+            detectedLibraries.clear();
+            callGraph.clear();
+            securityAnnotator.clear();
+            apiEndpointIndex.clear();
+            diBindingResolver.clear();
+            architectureDetector.clear();
+            stringConstantIndex.clear();
+
             layers.markBuilding(1);
             long start = System.currentTimeMillis();
             codeIndex = new ConcurrentHashMap<>();
 
-            var classList = decompiler.getClassesWithInners();
+            // Defensive copy: getClassesWithInners() returns a view over JADX's internal list
+            // which may still be mutated by background threads. Copy to our own ArrayList.
+            var rawList = decompiler.getClassesWithInners();
+            var classList = new java.util.ArrayList<>(rawList);
             totalClasses = classList.size();
             indexedCount.set(0);
 
@@ -153,64 +168,90 @@ public class CodeIndexManager {
                         // Still index the code (might be needed for specific queries)
                     }
 
-                    // Code indexing
-                    String code = cls.getCode();
+                    // === Layer 2: IR scan via ClassNode (NO decompilation trigger) ===
+                    // IMPORTANT: We use cls.getClassNode().getMethods() instead of
+                    // cls.getMethods(). The latter calls JavaClass.load() which triggers
+                    // full decompilation → InlineMethods.forceProcess() → unload(),
+                    // causing JadxRuntimeException for complex classes and wiping IR.
+                    // ClassNode.getMethods() returns raw MethodNodes without decompiling.
+
+                    if (lib == null) {
+                        try {
+                            ClassNode classNode = cls.getClassNode();
+                            for (MethodNode mth : classNode.getMethods()) {
+                                try {
+                                    String methodName = mth.getName();
+                                    if (methodName == null) continue;
+                                    String methodKey = fullName + "#" + methodName;
+
+                                    // Load raw DEX instructions into IR
+                                    try {
+                                        mth.load();
+                                    } catch (Exception ignored) {
+                                        continue; // skip methods whose IR cannot be loaded
+                                    }
+
+                                    // Walk instructions looking for InvokeNodes
+                                    InsnNode[] instructions = mth.getInstructions();
+                                    if (instructions != null) {
+                                        for (InsnNode insn : instructions) {
+                                            if (insn == null) continue;
+                                            if (insn.getType() == InsnType.INVOKE) {
+                                                try {
+                                                    InvokeNode invoke = (InvokeNode) insn;
+                                                    var callMth = invoke.getCallMth();
+                                                    if (callMth == null) continue;
+                                                    String callTarget = callMth.toString();
+
+                                                    callGraph.addEdge(methodKey, callTarget);
+                                                    securityAnnotator.recordInvoke(methodKey, fullName, callTarget);
+                                                } catch (Exception ignored) {
+                                                    // Malformed invoke instruction; skip
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Free IR memory immediately after scanning
+                                    try { mth.unload(); } catch (Exception ignored) {}
+                                } catch (Exception ignored) {
+                                    // Single method failure; continue with next
+                                }
+                            }
+                        } catch (Throwable e) {
+                            // ClassNode access or IR iteration failure; non-fatal
+                        }
+                    }
+
+                    // Code indexing — getCode() triggers decompile (separate from IR scan)
+                    String code = null;
+                    try {
+                        code = cls.getCode();
+                    } catch (Throwable e) {
+                        // Decompilation can fail for some classes; non-fatal
+                    }
                     if (code != null && !code.isEmpty()) {
                         codeIndex.put(fullName, code);
                     }
 
-                    // === Layer 2: piggyback analysis (zero extra traversal) ===
+                    // === Layer 2: source-code-based analysis (uses decompiled text) ===
+                    // Each analysis is wrapped independently so one failure doesn't skip others
 
-                    // Skip deep analysis for third-party libraries
-                    if (lib == null) {
-                        // ApiEndpointIndex: scan source for Retrofit/OkHttp annotations
-                        if (code != null) {
-                            apiEndpointIndex.scanClass(fullName, code);
-                        }
+                    if (lib == null && code != null) {
+                        try { apiEndpointIndex.scanClass(fullName, code); }
+                        catch (Exception ignored) {}
 
-                        // DIBindingResolver: scan for @Module/@Provides/@Binds
-                        if (code != null) {
-                            diBindingResolver.scanClass(fullName, code);
-                        }
+                        try { diBindingResolver.scanClass(fullName, code); }
+                        catch (Exception ignored) {}
 
-                        // ArchitectureDetector: accumulate architecture signals
-                        if (code != null) {
-                            architectureDetector.analyzeClass(fullName, code);
-                        }
+                        try { architectureDetector.analyzeClass(fullName, code); }
+                        catch (Exception ignored) {}
 
-                        // StringConstantIndex: extract string literals for inverted index
-                        if (code != null) {
-                            stringConstantIndex.scanClass(fullName, code);
-                        }
-
-                        // CallGraph + SecurityAnnotator: scan InvokeNodes via JADX IR
-                        try {
-                            for (JavaMethod javaMethod : cls.getMethods()) {
-                                MethodNode mth = javaMethod.getMethodNode();
-                                String methodKey = fullName + "#" + javaMethod.getName();
-
-                                // Walk instructions looking for InvokeNodes
-                                if (mth.getInstructions() != null) {
-                                    for (InsnNode insn : mth.getInstructions()) {
-                                        if (insn != null && insn.getType() == InsnType.INVOKE) {
-                                            InvokeNode invoke = (InvokeNode) insn;
-                                            String callTarget = invoke.getCallMth().toString();
-
-                                            // CallGraph: record edge
-                                            callGraph.addEdge(methodKey, callTarget);
-
-                                            // SecurityAnnotator: check sink/source
-                                            securityAnnotator.recordInvoke(methodKey, fullName, callTarget);
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (Exception e) {
-                            // IR access can fail for some classes; non-fatal
-                        }
+                        try { stringConstantIndex.scanClass(fullName, code); }
+                        catch (Exception ignored) {}
                     }
 
-                } catch (Exception ignored) {
+                } catch (Throwable ignored) {
                     // Single class failure should not break the whole index
                 } finally {
                     int done = indexedCount.incrementAndGet();
