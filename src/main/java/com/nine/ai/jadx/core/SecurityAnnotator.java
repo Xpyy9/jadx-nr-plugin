@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * Layer 2: Sink/Source 安全标注器。
@@ -138,6 +139,32 @@ public class SecurityAnnotator {
         SOURCE_APIS.put("android.widget.EditText.getText", "user_input");
     }
 
+    // ==================== Protocol Field Patterns ====================
+
+    /**
+     * Protocol field detection patterns for sign/token/encrypt/timestamp fields.
+     * Used by findProtocolFields() for AST-level detection from annotations.
+     */
+    private static final List<ProtocolFieldPattern> PROTOCOL_FIELD_PATTERNS = List.of(
+        // Sign/signature fields
+        new ProtocolFieldPattern("sign", Pattern.compile("(?i)(x-sign|signature|x-signature|hmac)"), "header"),
+        new ProtocolFieldPattern("sign", Pattern.compile("(?i)(sign|signature)"), "query"),
+        // Token fields
+        new ProtocolFieldPattern("token", Pattern.compile("(?i)(authorization|auth-token|x-token|bearer)"), "header"),
+        new ProtocolFieldPattern("token", Pattern.compile("(?i)(token|access_token|refresh_token|session_id)"), "query"),
+        // Encryption fields
+        new ProtocolFieldPattern("encrypt_data", Pattern.compile("(?i)(encrypt|cipher|encrypted_data|encryptdata)"), "query"),
+        new ProtocolFieldPattern("encrypt_data", Pattern.compile("(?i)(x-encrypted|x-cipher)"), "header"),
+        // Timestamp/nonce
+        new ProtocolFieldPattern("timestamp", Pattern.compile("(?i)(timestamp|ts)"), "query"),
+        new ProtocolFieldPattern("nonce", Pattern.compile("(?i)(nonce|random|iv)"), "query"),
+        // Device/session
+        new ProtocolFieldPattern("device_id", Pattern.compile("(?i)(device_id|deviceid|udid)"), "query"),
+        new ProtocolFieldPattern("session", Pattern.compile("(?i)(session|sid|jsessionid)"), "cookie")
+    );
+
+    record ProtocolFieldPattern(String fieldRole, Pattern namePattern, String location) {}
+
     // ==================== Annotation API ====================
 
     /**
@@ -174,8 +201,9 @@ public class SecurityAnnotator {
             summary.totalSources += tag.getSourceCount();
             summary.sinkCategories.addAll(tag.getSinkCategories());
             summary.sourceCategories.addAll(tag.getSourceCategories());
+            summary.protocolFields.addAll(tag.getProtocolFields());
         }
-        if (summary.totalSinks > 0 || summary.totalSources > 0) {
+        if (summary.totalSinks > 0 || summary.totalSources > 0 || !summary.protocolFields.isEmpty()) {
             summary.riskLevel = computeRiskLevel(summary);
             classSummaries.put(className, summary);
         }
@@ -298,6 +326,134 @@ public class SecurityAnnotator {
         return results;
     }
 
+    /**
+     * Detect protocol fields from method annotations (AST-level).
+     * Matches @Header/@Query/@Field/@Headers against PROTOCOL_FIELD_PATTERNS.
+     * Returns list of protocol field maps with confidence 0.9 (higher than agent regex).
+     */
+    public List<Map<String, Object>> findProtocolFields(String className, String methodName,
+                                                         List<?> annotations, List<?> parameterAnnotations) {
+        List<Map<String, Object>> fields = new ArrayList<>();
+        if (annotations == null) return fields;
+
+        // 1. Check method annotations (@Header, @Query, @Field)
+        for (Object annObj : annotations) {
+            String annStr = annObj.toString();
+            String location = null;
+            if (annStr.contains("retrofit2/http/Header")) location = "header";
+            else if (annStr.contains("retrofit2/http/Query")) location = "query";
+            else if (annStr.contains("retrofit2/http/Field")) location = "body";
+            if (location == null) continue;
+
+            String fieldName = extractAnnotationName(annStr);
+            if (fieldName == null) continue;
+
+            for (ProtocolFieldPattern pfp : PROTOCOL_FIELD_PATTERNS) {
+                if (pfp.location().equals(location) && pfp.namePattern().matcher(fieldName).find()) {
+                    Map<String, Object> field = new LinkedHashMap<>();
+                    field.put("field_name", fieldName);
+                    field.put("field_role", pfp.fieldRole());
+                    field.put("location", location);
+                    field.put("class_name", className);
+                    field.put("method_name", methodName);
+                    field.put("confidence", 0.9);
+                    field.put("source", "annotation");
+                    fields.add(field);
+                    break;
+                }
+            }
+        }
+
+        // 2. Check @Headers annotation for static header fields
+        for (Object annObj : annotations) {
+            String annStr = annObj.toString();
+            if (!annStr.contains("retrofit2/http/Headers")) continue;
+            List<String> headerValues = extractHeadersValues(annStr);
+            for (String headerLine : headerValues) {
+                String[] parts = headerLine.split(":", 2);
+                if (parts.length < 2) continue;
+                String headerName = parts[0].trim();
+                for (ProtocolFieldPattern pfp : PROTOCOL_FIELD_PATTERNS) {
+                    if (pfp.location().equals("header") && pfp.namePattern().matcher(headerName).find()) {
+                        Map<String, Object> field = new LinkedHashMap<>();
+                        field.put("field_name", headerName);
+                        field.put("field_role", pfp.fieldRole());
+                        field.put("location", "header");
+                        field.put("class_name", className);
+                        field.put("method_name", methodName);
+                        field.put("confidence", 0.85);
+                        field.put("source", "headers_annotation");
+                        fields.add(field);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 3. Check parameter annotations
+        if (parameterAnnotations != null) {
+            for (Object paramAnnObj : parameterAnnotations) {
+                String paramAnnStr = paramAnnObj.toString();
+                String location = null;
+                if (paramAnnStr.contains("retrofit2/http/Header")) location = "header";
+                else if (paramAnnStr.contains("retrofit2/http/Query")) location = "query";
+                else if (paramAnnStr.contains("retrofit2/http/Field")) location = "body";
+                if (location == null) continue;
+
+                String paramName = extractAnnotationName(paramAnnStr);
+                if (paramName == null) continue;
+
+                for (ProtocolFieldPattern pfp : PROTOCOL_FIELD_PATTERNS) {
+                    if (pfp.location().equals(location) && pfp.namePattern().matcher(paramName).find()) {
+                        Map<String, Object> field = new LinkedHashMap<>();
+                        field.put("field_name", paramName);
+                        field.put("field_role", pfp.fieldRole());
+                        field.put("location", location);
+                        field.put("class_name", className);
+                        field.put("method_name", methodName);
+                        field.put("confidence", 0.9);
+                        field.put("source", "parameter_annotation");
+                        fields.add(field);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return fields;
+    }
+
+    /**
+     * Extract the name/value from an annotation string.
+     * Handles formats like @Header("X-Sign") or @Query("token").
+     */
+    private String extractAnnotationName(String annStr) {
+        int parenStart = annStr.indexOf("(\"");
+        if (parenStart < 0) return null;
+        int parenEnd = annStr.indexOf("\")", parenStart);
+        if (parenEnd < 0) return null;
+        return annStr.substring(parenStart + 2, parenEnd);
+    }
+
+    /**
+     * Extract header values from @Headers annotation.
+     * @Headers({"X-Sign: value", "X-Token: value"})
+     */
+    private List<String> extractHeadersValues(String annStr) {
+        List<String> values = new ArrayList<>();
+        int start = annStr.indexOf('{');
+        int end = annStr.lastIndexOf('}');
+        if (start < 0 || end < 0 || end <= start) return values;
+        String content = annStr.substring(start + 1, end);
+        for (String part : content.split(",")) {
+            String trimmed = part.trim().replaceAll("^\"|\"$", "");
+            if (trimmed.contains(":")) {
+                values.add(trimmed);
+            }
+        }
+        return values;
+    }
+
     public Map<String, Object> getTagAsMap(String methodKey) {
         return getTagAsMap(methodKey, null);
     }
@@ -318,6 +474,11 @@ public class SecurityAnnotator {
         result.put("is_source", tag.hasSources());
         if (tag.hasSources()) {
             result.put("source_categories", new ArrayList<>(tag.getSourceCategories()));
+        }
+
+        // protocol_fields from AST-level detection
+        if (!tag.getProtocolFields().isEmpty()) {
+            result.put("protocol_fields", tag.getProtocolFields());
         }
 
         // rules_matched from Layer 3 (if available)
@@ -357,6 +518,11 @@ public class SecurityAnnotator {
         result.put("sink_categories", new ArrayList<>(summary.sinkCategories));
         result.put("source_categories", new ArrayList<>(summary.sourceCategories));
         result.put("risk_level", summary.riskLevel);
+
+        // Protocol fields from AST-level detection
+        if (!summary.protocolFields.isEmpty()) {
+            result.put("protocol_fields", summary.protocolFields);
+        }
 
         // Layer 3 enrichment
         if (ruleEngine != null) {
@@ -449,6 +615,7 @@ public class SecurityAnnotator {
         private final Set<String> sourceCategories = ConcurrentHashMap.newKeySet();
         private final List<String> sinkApis = Collections.synchronizedList(new ArrayList<>());
         private final List<String> sourceApis = Collections.synchronizedList(new ArrayList<>());
+        private final List<Map<String, Object>> protocolFields = Collections.synchronizedList(new ArrayList<>());
 
         public void addSink(String category, String api) {
             sinkCategories.add(category);
@@ -460,6 +627,10 @@ public class SecurityAnnotator {
             sourceApis.add(api);
         }
 
+        public void addProtocolFields(List<Map<String, Object>> fields) {
+            if (fields != null) protocolFields.addAll(fields);
+        }
+
         public boolean hasSinks() { return !sinkCategories.isEmpty(); }
         public boolean hasSources() { return !sourceCategories.isEmpty(); }
         public int getSinkCount() { return sinkApis.size(); }
@@ -468,6 +639,7 @@ public class SecurityAnnotator {
         public Set<String> getSourceCategories() { return sourceCategories; }
         public List<String> getSinkApis() { return sinkApis; }
         public List<String> getSourceApis() { return sourceApis; }
+        public List<Map<String, Object>> getProtocolFields() { return protocolFields; }
     }
 
     public static class ClassSecuritySummary {
@@ -476,5 +648,6 @@ public class SecurityAnnotator {
         public Set<String> sinkCategories = new HashSet<>();
         public Set<String> sourceCategories = new HashSet<>();
         public String riskLevel = "low";
+        public List<Map<String, Object>> protocolFields = new ArrayList<>();
     }
 }

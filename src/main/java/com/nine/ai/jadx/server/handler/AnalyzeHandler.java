@@ -528,9 +528,30 @@ public class AnalyzeHandler extends BaseHandler {
             result.put("rule_scan_summary", scanSummary);
         }
 
-        // 7. Suggested analysis priorities (intelligent generation)
-        List<String> priorities = generatePriorities(topRisk, sinkDist, secAnnotator);
-        result.put("suggested_analysis_priorities", priorities);
+        // 7. Analysis priorities (structured format for Go agent)
+        List<String> rawPriorities = generatePriorities(topRisk, sinkDist, secAnnotator);
+        List<Map<String, Object>> priorities = new ArrayList<>();
+        for (String p : rawPriorities) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("target", p);
+            entry.put("reason", "auto-detected");
+            entry.put("priority", "medium");
+            priorities.add(entry);
+        }
+        result.put("analysis_priorities", priorities);
+
+        // 8. Source distribution (per-category source counts)
+        String[] sourceCategories = {"intent", "deeplink", "network", "file", "clipboard", "shared_prefs", "user_input"};
+        Map<String, Integer> sourceDist = new LinkedHashMap<>();
+        for (String cat : sourceCategories) {
+            List<Map<String, Object>> sources = secAnnotator.findSources(cat);
+            if (!sources.isEmpty()) {
+                sourceDist.put(cat, sources.size());
+            }
+        }
+        if (!sourceDist.isEmpty()) {
+            result.put("source_distribution", sourceDist);
+        }
 
         http.sendResponse(exchange, 200, http.toJson(result));
     }

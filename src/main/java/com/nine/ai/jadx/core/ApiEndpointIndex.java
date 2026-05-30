@@ -55,6 +55,14 @@ public class ApiEndpointIndex {
     private static final Pattern RETROFIT_HEADER_PARAM = Pattern.compile(
             "@Header\\s*\\(\\s*\"([^\"]*)\"\\s*\\)");
 
+    // Retrofit @Query parameter
+    private static final Pattern RETROFIT_QUERY_PARAM = Pattern.compile(
+            "@Query\\s*\\(\\s*\"([^\"]*)\"\\s*\\)");
+
+    // Retrofit @Field parameter
+    private static final Pattern RETROFIT_FIELD_PARAM = Pattern.compile(
+            "@Field\\s*\\(\\s*\"([^\"]*)\"\\s*\\)");
+
     // Retrofit base URL in builder pattern
     private static final Pattern BASE_URL_PATTERN = Pattern.compile(
             "\\.baseUrl\\s*\\(\\s*\"(https?://[^\"]+)\"\\s*\\)");
@@ -197,6 +205,9 @@ public class ApiEndpointIndex {
 
             // Check for @Headers on this method
             endpoint.headers = findHeadersNear(sourceCode, matcher.start());
+
+            // Extract protocol fields (@Query, @Field, @Header parameters)
+            endpoint.protocolFields = findProtocolFieldsNear(className, methodName, sourceCode, matcher.start(), matcher.end());
 
             found.add(endpoint);
         }
@@ -379,6 +390,19 @@ public class ApiEndpointIndex {
         }
         summary.put("top_endpoints", topEndpoints);
 
+        // Protocol field distribution (count by field role across all endpoints)
+        Map<String, Integer> protocolFieldDist = new LinkedHashMap<>();
+        for (ApiEndpoint ep : endpoints) {
+            for (Map<String, String> pf : ep.protocolFields) {
+                String fieldName = pf.getOrDefault("field_name", "");
+                String role = classifyFieldRole(fieldName);
+                protocolFieldDist.merge(role, 1, Integer::sum);
+            }
+        }
+        if (!protocolFieldDist.isEmpty()) {
+            summary.put("protocol_field_distribution", protocolFieldDist);
+        }
+
         return summary;
     }
 
@@ -405,6 +429,69 @@ public class ApiEndpointIndex {
     }
 
     // ==================== Internal helpers ====================
+
+    /**
+     * Find @Query/@Field/@Header parameter annotations near a Retrofit method annotation.
+     * Returns protocol field maps with field_name, location, class_name, method_name.
+     */
+    private List<Map<String, String>> findProtocolFieldsNear(String className, String methodName,
+                                                               String source, int annStart, int annEnd) {
+        List<Map<String, String>> fields = new ArrayList<>();
+        // Search the method signature area (after annotation, within 500 chars)
+        int searchEnd = Math.min(annEnd + 500, source.length());
+        String snippet = source.substring(annEnd, searchEnd);
+
+        // @Query parameters
+        Matcher queryMatcher = RETROFIT_QUERY_PARAM.matcher(snippet);
+        while (queryMatcher.find()) {
+            Map<String, String> field = new LinkedHashMap<>();
+            field.put("field_name", queryMatcher.group(1));
+            field.put("location", "query");
+            field.put("class_name", className);
+            field.put("method_name", methodName);
+            fields.add(field);
+        }
+
+        // @Field parameters
+        Matcher fieldMatcher = RETROFIT_FIELD_PARAM.matcher(snippet);
+        while (fieldMatcher.find()) {
+            Map<String, String> field = new LinkedHashMap<>();
+            field.put("field_name", fieldMatcher.group(1));
+            field.put("location", "body");
+            field.put("class_name", className);
+            field.put("method_name", methodName);
+            fields.add(field);
+        }
+
+        // @Header parameters
+        Matcher headerMatcher = RETROFIT_HEADER_PARAM.matcher(snippet);
+        while (headerMatcher.find()) {
+            Map<String, String> field = new LinkedHashMap<>();
+            field.put("field_name", headerMatcher.group(1));
+            field.put("location", "header");
+            field.put("class_name", className);
+            field.put("method_name", methodName);
+            fields.add(field);
+        }
+
+        return fields;
+    }
+
+    /**
+     * Classify a field name into a protocol field role.
+     */
+    private static String classifyFieldRole(String name) {
+        if (name == null) return "custom";
+        String lower = name.toLowerCase();
+        if (lower.contains("sign") || lower.contains("hmac") || lower.contains("signature")) return "sign";
+        if (lower.contains("token") || lower.contains("authorization") || lower.contains("bearer")) return "token";
+        if (lower.contains("encrypt") || lower.contains("cipher")) return "encrypt_data";
+        if (lower.contains("timestamp") || lower.equals("ts")) return "timestamp";
+        if (lower.contains("nonce") || lower.equals("iv")) return "nonce";
+        if (lower.contains("session") || lower.equals("sid")) return "session";
+        if (lower.contains("device") || lower.contains("udid") || lower.contains("imei")) return "device_id";
+        return "custom";
+    }
 
     private String findMethodNameAfter(String source, int afterPos) {
         // Look for the next method declaration after the annotation
@@ -458,6 +545,7 @@ public class ApiEndpointIndex {
         public String methodName;      // Java method name
         public String source;          // "retrofit", "okhttp", "httpurlconnection"
         public List<String> headers = new ArrayList<>();
+        public List<Map<String, String>> protocolFields = new ArrayList<>();
 
         public Map<String, Object> toMap() {
             Map<String, Object> map = new LinkedHashMap<>();
@@ -468,6 +556,9 @@ public class ApiEndpointIndex {
             map.put("source", source);
             if (!headers.isEmpty()) {
                 map.put("headers", headers);
+            }
+            if (!protocolFields.isEmpty()) {
+                map.put("protocol_fields", protocolFields);
             }
             return map;
         }
