@@ -1,0 +1,66 @@
+version: "1.0"
+category: "protocol_fields"
+
+rules:
+  - id: plaintext_token_storage
+    severity: high
+    name: "明文 Token 存储"
+    description: "Token/Session ID 存储在 SharedPreferences 中未加密"
+    match:
+      type: pattern
+      all:
+        - string_contains: "SharedPreferences"
+        - string_contains: "putString"
+      any:
+        - string_contains: "token"
+        - string_contains: "session_id"
+        - string_contains: "access_token"
+        - string_contains: "refresh_token"
+    context_lines: 5
+    remediation: "使用 EncryptedSharedPreferences 或 Android Keystore 存储敏感 token"
+    tags: ["cwe-312", "protocol-field"]
+
+  - id: hardcoded_sign_key
+    severity: critical
+    name: "硬编码签名密钥"
+    description: "HMAC/签名操作使用硬编码密钥"
+    match:
+      type: pattern
+      all:
+        - method_invoke: "javax.crypto.Mac.getInstance"
+        - type: has_literal_arg
+    context_lines: 3
+    remediation: "签名密钥应从安全存储动态获取，不得硬编码"
+    tags: ["cwe-798", "protocol-field"]
+
+  - id: token_in_url_query
+    severity: high
+    name: "Token 通过 URL 传输"
+    description: "Token/Session ID 通过 URL query 参数传输，易被日志和中间件泄露"
+    match:
+      type: pattern
+      all:
+        - string_contains: "addQueryParameter"
+      any:
+        - string_contains: "token"
+        - string_contains: "access_token"
+        - string_contains: "session"
+    context_lines: 3
+    remediation: "Token 应通过 Header (Authorization) 传输，不要放在 URL 中"
+    tags: ["cwe-598", "protocol-field"]
+
+  - id: weak_sign_algorithm
+    severity: high
+    name: "弱签名算法"
+    description: "使用 MD5/SHA1 等弱哈希算法进行签名"
+    match:
+      type: pattern
+      all:
+        - method_invoke: "java.security.MessageDigest.getInstance"
+      any:
+        - args_contain: ["MD5"]
+        - args_contain: ["SHA-1"]
+        - args_contain: ["SHA1"]
+    context_lines: 3
+    remediation: "使用 SHA-256 或更高强度的哈希算法进行签名"
+    tags: ["cwe-328", "protocol-field"]

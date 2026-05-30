@@ -241,6 +241,9 @@ public class CodeIndexManager {
                         try { apiEndpointIndex.scanClass(fullName, code); }
                         catch (Exception ignored) {}
 
+                        try { securityAnnotator.scanProtocolFields(fullName, code); }
+                        catch (Exception ignored) {}
+
                         try { diBindingResolver.scanClass(fullName, code); }
                         catch (Exception ignored) {}
 

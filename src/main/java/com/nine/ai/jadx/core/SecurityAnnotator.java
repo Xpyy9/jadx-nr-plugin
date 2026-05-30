@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -421,6 +422,106 @@ public class SecurityAnnotator {
         }
 
         return fields;
+    }
+
+    /**
+     * Source-code-based protocol field scanning for indexing pipeline.
+     * Uses regex on decompiled source to detect @Header/@Query/@Field annotations.
+     * Called during parallelStream indexing alongside apiEndpointIndex.scanClass().
+     */
+    public void scanProtocolFields(String className, String sourceCode) {
+        if (sourceCode == null || sourceCode.isEmpty()) return;
+
+        // Pattern: @Header("X-Sign"), @Query("token"), @Field("encryptData"), etc.
+        Pattern annPattern = Pattern.compile(
+                "@(Header|Query|Field)\\s*\\(\\s*\"([^\"]+)\"\\s*\\)");
+        // Pattern: @Headers({"X-Sign: value", "X-Token: value"})
+        Pattern headersPattern = Pattern.compile(
+                "@Headers\\s*\\(\\s*\\{([^}]+)\\}\\s*\\)");
+        // Pattern: method declaration after annotation
+        Pattern methodPattern = Pattern.compile(
+                "(?:public|private|protected)?\\s*(?:static)?\\s*(?:abstract)?\\s*[\\w<>\\[\\]?,\\s]+\\s+(\\w+)\\s*\\(");
+
+        List<Map<String, Object>> allFields = new ArrayList<>();
+
+        // Scan for @Header/@Query/@Field annotations
+        Matcher matcher = annPattern.matcher(sourceCode);
+        while (matcher.find()) {
+            String annType = matcher.group(1);
+            String fieldName = matcher.group(2);
+
+            String location = switch (annType) {
+                case "Header" -> "header";
+                case "Query" -> "query";
+                case "Field" -> "body";
+                default -> null;
+            };
+            if (location == null) continue;
+
+            // Find method name near this annotation
+            String methodName = findMethodNear(sourceCode, matcher.end(), methodPattern);
+
+            for (ProtocolFieldPattern pfp : PROTOCOL_FIELD_PATTERNS) {
+                if (pfp.location().equals(location) && pfp.namePattern().matcher(fieldName).find()) {
+                    Map<String, Object> field = new LinkedHashMap<>();
+                    field.put("field_name", fieldName);
+                    field.put("field_role", pfp.fieldRole());
+                    field.put("location", location);
+                    field.put("class_name", className);
+                    field.put("method_name", methodName);
+                    field.put("confidence", 0.85); // source-code-based, slightly lower than AST
+                    field.put("source", "index_scan");
+                    allFields.add(field);
+                    break;
+                }
+            }
+        }
+
+        // Scan for @Headers annotation
+        Matcher headersMatcher = headersPattern.matcher(sourceCode);
+        while (headersMatcher.find()) {
+            String content = headersMatcher.group(1);
+            String methodName = findMethodNear(sourceCode, headersMatcher.end(), methodPattern);
+
+            for (String part : content.split(",")) {
+                String trimmed = part.trim().replaceAll("^\"|\"$", "");
+                String[] kv = trimmed.split(":", 2);
+                if (kv.length < 2) continue;
+                String headerName = kv[0].trim();
+
+                for (ProtocolFieldPattern pfp : PROTOCOL_FIELD_PATTERNS) {
+                    if (pfp.location().equals("header") && pfp.namePattern().matcher(headerName).find()) {
+                        Map<String, Object> field = new LinkedHashMap<>();
+                        field.put("field_name", headerName);
+                        field.put("field_role", pfp.fieldRole());
+                        field.put("location", "header");
+                        field.put("class_name", className);
+                        field.put("method_name", methodName);
+                        field.put("confidence", 0.85);
+                        field.put("source", "index_scan_headers");
+                        allFields.add(field);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Store results in SecurityTag for each method
+        for (Map<String, Object> field : allFields) {
+            String methodKey = className + "#" + field.get("method_name");
+            SecurityTag tag = annotations.computeIfAbsent(methodKey, k -> new SecurityTag());
+            tag.addProtocolFields(List.of(field));
+        }
+    }
+
+    private String findMethodNear(String source, int afterPos, Pattern methodPattern) {
+        int searchEnd = Math.min(afterPos + 300, source.length());
+        String snippet = source.substring(afterPos, searchEnd);
+        Matcher m = methodPattern.matcher(snippet);
+        if (m.find()) {
+            return m.group(1);
+        }
+        return "unknown";
     }
 
     /**

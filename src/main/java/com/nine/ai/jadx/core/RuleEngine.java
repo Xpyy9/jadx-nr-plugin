@@ -50,7 +50,8 @@ public class RuleEngine {
             "rules/logging.yaml",
             "rules/network.yaml",
             "rules/hardcoded_secrets.yaml",
-            "rules/root_detection.yaml"
+            "rules/root_detection.yaml",
+            "rules/protocol_fields.yaml"
     };
 
     // ==================== Load API ====================
